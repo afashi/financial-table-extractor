@@ -37,3 +37,35 @@ Filled backend and frontend Trellis guideline docs from requirement, design, and
 ### Next Steps
 
 - None - task complete
+
+
+## Session 2: Core Service Task Intake MVP
+
+**Date**: 2026-03-23
+**Task**: Core Service Task Intake MVP
+
+### Summary
+
+Implemented the first backend MVP slice: FastAPI core-service scaffold, PostgreSQL-backed t_task persistence, Snowflake task IDs, Docker Compose infra for PostgreSQL Redis and MinIO, Alembic migration, automated tests, and local smoke-tested task intake endpoints.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `4317a0b` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
