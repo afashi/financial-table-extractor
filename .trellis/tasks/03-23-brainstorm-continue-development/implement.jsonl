@@ -1,3 +1,0 @@
-{"file": ".trellis/workflow.md", "reason": "Project workflow and conventions"}
-{"file": ".trellis/spec/backend/index.md", "reason": "Backend development guide"}
-{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "Database and migration rules for t_task slice"}
