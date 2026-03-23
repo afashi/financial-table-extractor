@@ -26,6 +26,7 @@ real code references as soon as possible.
 |-------|-------------|--------|
 | [Directory Structure](./directory-structure.md) | Service boundaries, module layout, file naming | Bootstrapped from design |
 | [Database Guidelines](./database-guidelines.md) | PostgreSQL, pgvector, JSONB, MinIO boundaries | Bootstrapped from schema and design |
+| [Task Pipeline Contracts](./task-pipeline-contracts.md) | HTTP, queue, MinIO, and task-status contracts for async parser flow | Executable contract |
 | [Error Handling](./error-handling.md) | Task lifecycle failures vs business no-data states | Bootstrapped from workflow design |
 | [Quality Guidelines](./quality-guidelines.md) | Required patterns, forbidden patterns, review gates | Bootstrapped from architecture docs |
 | [Logging Guidelines](./logging-guidelines.md) | Structured logs for async pipeline tracing | Bootstrapped from workflow design |

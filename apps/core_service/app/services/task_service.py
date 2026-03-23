@@ -119,7 +119,7 @@ class TaskService:
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 retryable=True,
                 details={"reason": exc.__class__.__name__},
-            )
+            ) from exc
         finally:
             await upload.close()
 
@@ -134,7 +134,7 @@ class TaskService:
                 retryable=True,
                 details={"reason": exc.__class__.__name__},
                 task_id=task_id,
-            )
+            ) from exc
 
         if task is None:
             raise AppError(
