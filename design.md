@@ -90,6 +90,12 @@
     6. 将上传的 PDF 字节流异步写入 MinIO（路径: `tasks/{TaskID}/source/{FileName}`）。
     7. 在 PostgreSQL `tasks` 表初始化记录，状态设为 `QUEUED`。
     8. 将携带 `task_id` 与源文件对象存储引用的解析请求压入 Redis 的 `parser_queue`。
+
+- **MVP 契约补充**:
+
+    - 在仅实现任务骨架的第一阶段，`POST /api/v1/extract` 仍接收真实上传文件与 `doc_type`，但只执行 TaskID 生成、去重校验、`t_task` 持久化与响应返回，不接 MinIO/Redis。
+    - `GET /tasks/{task_id}` 用于查询任务状态与指纹元数据。
+    - `task_id` 在数据库层保持 `BIGINT`，在 JSON API 响应层以十进制字符串返回，以避免前端 JavaScript 精度丢失。
         
 - **状态变更**: `QUEUED`
     

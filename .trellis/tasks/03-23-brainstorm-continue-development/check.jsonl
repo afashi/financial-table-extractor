@@ -1,0 +1,8 @@
+{"file": ".agents/skills/finish-work/SKILL.md", "reason": "Finish work checklist"}
+{"file": ".agents/skills/check-backend/SKILL.md", "reason": "Backend check spec"}
+{"file": ".trellis/spec/backend/directory-structure.md", "reason": "Backend module layout for review"}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "Boundary checks for API service DB review"}
+{"file": ".trellis/spec/backend/quality-guidelines.md", "reason": "Required and forbidden backend patterns for review"}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "Database and migration rules for review"}
+{"file": ".trellis/spec/backend/logging-guidelines.md", "reason": "Structured logging fields for review"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "API and workflow error semantics for review"}

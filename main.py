@@ -1,6 +1,4 @@
-def main():
-    print("Hello from financial-table-extractor!")
-
+from apps.core_service.app.main import main
 
 if __name__ == "__main__":
     main()
