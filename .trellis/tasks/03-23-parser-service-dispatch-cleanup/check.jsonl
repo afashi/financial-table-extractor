@@ -1,0 +1,10 @@
+{"file": ".agents/skills/finish-work/SKILL.md", "reason": "Finish work checklist"}
+{"file": ".agents/skills/check-backend/SKILL.md", "reason": "Backend check spec"}
+{"file": ".trellis/spec/backend/directory-structure.md", "reason": "Review parser/core boundaries and package placement during cleanup."}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "Review queue payload and storage contracts across layers."}
+{"file": ".trellis/spec/backend/logging-guidelines.md", "reason": "Review queue and parser logs for stable structured tracing fields."}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "Review parser lifecycle errors and retryability against the agreed failure model."}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "Review task status persistence and canonical artifact handling against the database contract."}
+{"file": "apps/core_service/app/services/task_service.py", "reason": "Review dispatch and retry handling against the current service-layer pattern."}
+{"file": "apps/core_service/app/main.py", "reason": "Review lifecycle wiring and service startup/shutdown against the established app pattern."}
+{"file": "tests/conftest.py", "reason": "Review fake client and integration fixture reuse against the established test pattern."}

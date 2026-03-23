@@ -37,3 +37,18 @@ class TaskRepository:
         await session.flush()
         await session.refresh(task)
         return task
+
+    async def set_status(
+        self,
+        session: AsyncSession,
+        task: Task,
+        *,
+        status: str,
+        remark: str | None,
+    ) -> Task:
+        task.status = status
+        task.remark = remark
+        task.update_time = datetime.now(UTC)
+        await session.flush()
+        await session.refresh(task)
+        return task

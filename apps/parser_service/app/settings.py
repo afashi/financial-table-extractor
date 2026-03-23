@@ -11,8 +11,7 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    app_name: str = "financial-table-extractor-core-service"
-    api_v1_prefix: str = "/api/v1"
+    app_name: str = "financial-table-extractor-parser-service"
     database_url: str = (
         "postgresql+asyncpg://postgres:postgres@localhost:55432/financial_table_extractor"
     )
@@ -23,8 +22,7 @@ class Settings(BaseSettings):
     minio_root_password: str = "minioadmin"
     minio_bucket: str = "financial-table-extractor"
     log_level: str = "INFO"
-    task_id_node_id: int = Field(default=1, ge=0, le=1023)
-    task_id_epoch_ms: int = Field(default=1735689600000, ge=0)
+    parser_poll_timeout_seconds: int = Field(default=5, ge=0, le=300)
 
 
 @lru_cache(maxsize=1)

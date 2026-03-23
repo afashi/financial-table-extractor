@@ -23,7 +23,7 @@ async def create_extract_task(
     return TaskSubmissionResponse.from_record(result.task, deduplicated=result.deduplicated)
 
 
-@router.get("/tasks/{task_id}", response_model=TaskReadResponse)
+@router.get("/api/v1/tasks/{task_id}", response_model=TaskReadResponse)
 async def get_task(
     task_id: int,
     service: TaskServiceDependency,

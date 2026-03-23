@@ -25,5 +25,7 @@ def get_task_service(
         session=session,
         id_generator=request.app.state.task_id_generator,
         logger=logger,
+        object_storage_client=request.app.state.object_storage_client,
+        queue_client=request.app.state.queue_client,
         trace_id=request.state.trace_id,
     )

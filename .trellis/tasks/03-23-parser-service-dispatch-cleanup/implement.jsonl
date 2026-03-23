@@ -1,0 +1,10 @@
+{"file": ".trellis/workflow.md", "reason": "Project workflow and conventions"}
+{"file": ".trellis/spec/backend/index.md", "reason": "Backend development guide"}
+{"file": ".trellis/spec/backend/error-handling.md", "reason": "Keep parser lifecycle errors and retryable dependency failures explicit."}
+{"file": ".trellis/spec/backend/database-guidelines.md", "reason": "Keep task status, MinIO artifact handling, and canonical content_list behavior aligned with the database contract."}
+{"file": ".trellis/spec/backend/logging-guidelines.md", "reason": "Keep queue, parser, and storage logs structured and traceable."}
+{"file": ".trellis/spec/backend/directory-structure.md", "reason": "Preserve parser/core service boundaries and package layout."}
+{"file": ".trellis/spec/guides/cross-layer-thinking-guide.md", "reason": "Track queue payload, object storage, and task status contracts across layers."}
+{"file": "apps/core_service/app/main.py", "reason": "Follow the existing lifespan-based dependency wiring for service startup and shutdown."}
+{"file": "apps/core_service/app/services/task_service.py", "reason": "Follow the existing dispatch boundary and task status handling patterns."}
+{"file": "tests/conftest.py", "reason": "Reuse the existing fake client and integration test fixture pattern."}

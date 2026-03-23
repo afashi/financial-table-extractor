@@ -10,6 +10,11 @@ from fastapi.responses import JSONResponse
 
 from apps.core_service.app.api.router import api_router
 from apps.core_service.app.clients.database import DatabaseClient
+from apps.core_service.app.clients.object_storage import (
+    MinioObjectStorageClient,
+    ObjectStorageClient,
+)
+from apps.core_service.app.clients.queue import QueueClient, RedisQueueClient
 from apps.core_service.app.errors import AppError
 from apps.core_service.app.logging_config import configure_logging
 from apps.core_service.app.schemas.errors import ErrorResponse
@@ -17,7 +22,12 @@ from apps.core_service.app.settings import Settings, get_settings
 from apps.shared.utils.snowflake import SnowflakeIdGenerator
 
 
-def create_app(settings: Settings | None = None) -> FastAPI:
+def create_app(
+    settings: Settings | None = None,
+    *,
+    object_storage_client: ObjectStorageClient | None = None,
+    queue_client: QueueClient | None = None,
+) -> FastAPI:
     app_settings = settings or get_settings()
     configure_logging(app_settings.log_level)
     logger = logging.getLogger(app_settings.app_name)
@@ -25,15 +35,31 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         database_client = DatabaseClient(app_settings.database_url)
+        storage_client = object_storage_client or MinioObjectStorageClient(
+            endpoint=app_settings.minio_endpoint,
+            access_key=app_settings.minio_root_user,
+            secret_key=app_settings.minio_root_password,
+            bucket_name=app_settings.minio_bucket,
+        )
+        parser_queue_client = queue_client or RedisQueueClient(
+            redis_url=app_settings.redis_url,
+            queue_name=app_settings.parser_queue_name,
+        )
         await database_client.healthcheck()
+        await storage_client.healthcheck()
+        await parser_queue_client.healthcheck()
         app.state.settings = app_settings
         app.state.logger = logger
         app.state.database_client = database_client
+        app.state.object_storage_client = storage_client
+        app.state.queue_client = parser_queue_client
         app.state.task_id_generator = SnowflakeIdGenerator(
             worker_id=app_settings.task_id_node_id,
             epoch_ms=app_settings.task_id_epoch_ms,
         )
         yield
+        await parser_queue_client.dispose()
+        await storage_client.dispose()
         await database_client.dispose()
 
     app = FastAPI(title=app_settings.app_name, lifespan=lifespan)

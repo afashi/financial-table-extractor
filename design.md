@@ -89,12 +89,14 @@
     5. 若没有命中文件，生成全局唯一 `TaskID`。
     6. 将上传的 PDF 字节流异步写入 MinIO（路径: `tasks/{TaskID}/source/{FileName}`）。
     7. 在 PostgreSQL `tasks` 表初始化记录，状态设为 `QUEUED`。
-    8. 将携带 `task_id` 与源文件对象存储引用的解析请求压入 Redis 的 `parser_queue`。
+    8. 将上传的 PDF 字节流异步写入 MinIO（路径: `tasks/{TaskID}/source/{FileName}`）。
+    9. 将携带 `task_id` 与源文件对象存储引用的解析请求压入 Redis 的 `parser_queue`。
 
-- **MVP 契约补充**:
+- **当前落地契约补充**:
 
-    - 在仅实现任务骨架的第一阶段，`POST /api/v1/extract` 仍接收真实上传文件与 `doc_type`，但只执行 TaskID 生成、去重校验、`t_task` 持久化与响应返回，不接 MinIO/Redis。
-    - `GET /tasks/{task_id}` 用于查询任务状态与指纹元数据。
+    - 当前 `POST /api/v1/extract` 已执行真实上传文件接收、TaskID 生成、去重校验、`t_task` 持久化、MinIO 源文件上传与 Redis `parser_queue` 投递。
+    - 若 MinIO 或 Redis 依赖失败，接口返回可重试的 `5xx` 错误，并将该任务状态更新为 `FAILED`，保留 `task_id` 供排查与重试。
+- `GET /api/v1/tasks/{task_id}` 用于查询任务状态与指纹元数据。
     - `task_id` 在数据库层保持 `BIGINT`，在 JSON API 响应层以十进制字符串返回，以避免前端 JavaScript 精度丢失。
         
 - **状态变更**: `QUEUED`
@@ -115,6 +117,12 @@
     4. 将 `content_list.json` 传回 MinIO（路径: `tasks/{TaskID}/content_list.json`），表格切片图片传回 MinIO（路径: `tasks/{TaskID}/slices/page-{n}.png`）。`content_list.json` 作为 canonical parse artifact 只读保存，后续阶段只消费不回写。
         
     5. 若解析成功且产物校验通过，则向 CPU 集群发送 `ParseCompleted` 事件；若解析失败或产物校验不通过，则发送 `ParseFailed` 事件并写入失败原因。
+
+- **当前落地契约补充**:
+
+    - 当前已实现 parser service skeleton：消费 `parser_queue`、从 MinIO 读取源 PDF、写回 `tasks/{TaskID}/content_list.json`，并回写 `t_task` 状态。
+    - 当前 parser engine 为占位实现，生成最小合法的 `content_list.json` 以验证链路与契约；后续再替换为真实 MinerU 调用。
+    - 当前状态回写链路为：消费成功后 `QUEUED -> PARSING -> PARSED`，解析或对象存储失败时 `PARSING -> FAILED`。
         
 - **状态变更**: `QUEUED` -> `PARSING` -> `PARSED`；失败路径为 `PARSING` -> `FAILED`
     
