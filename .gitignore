@@ -12,7 +12,6 @@ wheels/
 .venv
 
 .idea/
-/configs/
 !/configs/.env.template
 .env
 .pytest_cache/
