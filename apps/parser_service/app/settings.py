@@ -13,11 +13,11 @@ class Settings(BaseSettings):
 
     app_name: str = "financial-table-extractor-parser-service"
     database_url: str = (
-        "postgresql+asyncpg://postgres:postgres@localhost:55432/financial_table_extractor"
+        "postgresql+asyncpg://postgres:postgres@localhost:25432/financial_table_extractor"
     )
-    redis_url: str = "redis://localhost:6380/0"
+    redis_url: str = "redis://localhost:26379/0"
     parser_queue_name: str = "parser_queue"
-    minio_endpoint: str = "http://localhost:9000"
+    minio_endpoint: str = "http://localhost:29000"
     minio_root_user: str = "minioadmin"
     minio_root_password: str = "minioadmin"
     minio_bucket: str = "financial-table-extractor"

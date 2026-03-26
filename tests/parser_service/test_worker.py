@@ -26,6 +26,7 @@ def build_worker(test_app, parser_engine: ParserEngine) -> ParserWorker:
         queue_client=test_app.state.queue_client,
         parser_engine=parser_engine,
         logger=test_app.state.logger,
+        repository=test_app.state.task_repository,
     )
 
 

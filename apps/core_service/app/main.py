@@ -7,6 +7,8 @@ import uvicorn
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+from starlette.datastructures import MutableHeaders
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from apps.core_service.app.api.router import api_router
 from apps.core_service.app.clients.database import DatabaseClient
@@ -22,9 +24,32 @@ from apps.core_service.app.settings import Settings, get_settings
 from apps.shared.utils.snowflake import SnowflakeIdGenerator
 
 
+class TraceIdMiddleware:
+    def __init__(self, app: ASGIApp) -> None:
+        self._app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self._app(scope, receive, send)
+            return
+
+        trace_id = uuid4().hex
+        scope.setdefault("state", {})
+        scope["state"]["trace_id"] = trace_id
+
+        async def send_with_trace_id(message: Message) -> None:
+            if message["type"] == "http.response.start":
+                headers = MutableHeaders(scope=message)
+                headers.append("X-Trace-Id", trace_id)
+            await send(message)
+
+        await self._app(scope, receive, send_with_trace_id)
+
+
 def create_app(
     settings: Settings | None = None,
     *,
+    database_client: DatabaseClient | None = None,
     object_storage_client: ObjectStorageClient | None = None,
     queue_client: QueueClient | None = None,
 ) -> FastAPI:
@@ -34,7 +59,7 @@ def create_app(
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        database_client = DatabaseClient(app_settings.database_url)
+        db_client = database_client or DatabaseClient(app_settings.database_url)
         storage_client = object_storage_client or MinioObjectStorageClient(
             endpoint=app_settings.minio_endpoint,
             access_key=app_settings.minio_root_user,
@@ -45,12 +70,12 @@ def create_app(
             redis_url=app_settings.redis_url,
             queue_name=app_settings.parser_queue_name,
         )
-        await database_client.healthcheck()
+        await db_client.healthcheck()
         await storage_client.healthcheck()
         await parser_queue_client.healthcheck()
         app.state.settings = app_settings
         app.state.logger = logger
-        app.state.database_client = database_client
+        app.state.database_client = db_client
         app.state.object_storage_client = storage_client
         app.state.queue_client = parser_queue_client
         app.state.task_id_generator = SnowflakeIdGenerator(
@@ -60,18 +85,11 @@ def create_app(
         yield
         await parser_queue_client.dispose()
         await storage_client.dispose()
-        await database_client.dispose()
+        await db_client.dispose()
 
     app = FastAPI(title=app_settings.app_name, lifespan=lifespan)
+    app.add_middleware(TraceIdMiddleware)
     app.include_router(api_router)
-
-    @app.middleware("http")
-    async def attach_trace_id(request: Request, call_next):
-        trace_id = uuid4().hex
-        request.state.trace_id = trace_id
-        response = await call_next(request)
-        response.headers["X-Trace-Id"] = trace_id
-        return response
 
     @app.exception_handler(AppError)
     async def app_error_handler(request: Request, exc: AppError) -> JSONResponse:
@@ -135,3 +153,7 @@ def main() -> None:
         host="127.0.0.1",
         port=8000,
     )
+
+
+if __name__ == "__main__":
+    main()

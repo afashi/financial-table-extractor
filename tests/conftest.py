@@ -1,5 +1,6 @@
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
+from datetime import UTC, datetime
 
 import pytest
 from httpx import ASGITransport, AsyncClient
@@ -10,7 +11,7 @@ from apps.core_service.app.clients.object_storage import (
     StoredObjectRef,
 )
 from apps.core_service.app.clients.queue import QueueClient
-from apps.core_service.app.db.base import Base
+from apps.core_service.app.db.models.task import Task
 from apps.core_service.app.errors import QueueClientError, QueuePayloadError, StorageClientError
 from apps.core_service.app.main import create_app
 from apps.core_service.app.schemas.queue import ParserTaskMessage
@@ -127,26 +128,122 @@ class FakeQueueClient(QueueClient):
         return self.messages.pop(0)
 
 
+class FakeAsyncSession:
+    async def __aenter__(self) -> "FakeAsyncSession":
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb) -> bool:
+        return False
+
+    async def commit(self) -> None:
+        return None
+
+    async def rollback(self) -> None:
+        return None
+
+    async def refresh(self, instance: object) -> None:
+        return None
+
+    async def flush(self) -> None:
+        return None
+
+
+class FakeDatabaseClient:
+    def session_factory(self) -> FakeAsyncSession:
+        return FakeAsyncSession()
+
+    async def healthcheck(self) -> None:
+        return None
+
+    async def dispose(self) -> None:
+        return None
+
+
+class FakeTaskRepository:
+    def __init__(self) -> None:
+        self._tasks_by_id: dict[int, Task] = {}
+        self._task_ids_by_fingerprint: dict[tuple[str, int, str], int] = {}
+
+    async def get_by_id(self, session, task_id: int) -> Task | None:
+        del session
+        return self._tasks_by_id.get(task_id)
+
+    async def get_by_fingerprint(
+        self,
+        session,
+        *,
+        file_hash: str,
+        file_size: int,
+        doc_type: str,
+    ) -> Task | None:
+        del session
+        task_id = self._task_ids_by_fingerprint.get(
+            (file_hash, file_size, _enum_value(doc_type)),
+        )
+        if task_id is None:
+            return None
+        return self._tasks_by_id.get(task_id)
+
+    async def create(self, session, task: Task) -> Task:
+        del session
+        now = _utc_now()
+        task.create_time = now
+        task.update_time = now
+        self._tasks_by_id[task.id] = task
+        self._task_ids_by_fingerprint[
+            (task.file_hash, task.file_size, _enum_value(task.doc_type))
+        ] = task.id
+        return task
+
+    async def touch(self, session, task: Task) -> Task:
+        del session
+        task.update_time = _utc_now()
+        return task
+
+    async def set_status(
+        self,
+        session,
+        task: Task,
+        *,
+        status: str,
+        remark: str | None,
+    ) -> Task:
+        del session
+        task.status = _enum_value(status)
+        task.remark = remark
+        task.update_time = _utc_now()
+        return task
+
+
+def _utc_now() -> datetime:
+    return datetime.now(UTC)
+
+
+def _enum_value(value: str) -> str:
+    return value.value if hasattr(value, "value") else value
+
+
 @pytest.fixture
-async def test_app(tmp_path) -> AsyncIterator:
-    database_path = tmp_path / "test.db"
+async def test_app() -> AsyncIterator:
+    database_client = FakeDatabaseClient()
     object_storage_client = FakeObjectStorageClient()
     queue_client = FakeQueueClient()
+    task_repository = FakeTaskRepository()
     settings = Settings(
-        database_url=f"sqlite+aiosqlite:///{database_path.as_posix()}",
+        database_url="sqlite+aiosqlite:///unused.db",
         task_id_node_id=7,
         minio_bucket=object_storage_client.bucket_name,
         parser_queue_name=queue_client.queue_name,
     )
     app = create_app(
         settings,
+        database_client=database_client,
         object_storage_client=object_storage_client,
         queue_client=queue_client,
     )
+    app.state.task_repository = task_repository
 
     async with app.router.lifespan_context(app):
-        async with app.state.database_client.engine.begin() as connection:
-            await connection.run_sync(Base.metadata.create_all)
         yield app
 
 

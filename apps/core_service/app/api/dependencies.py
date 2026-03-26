@@ -16,11 +16,12 @@ async def get_session(request: Request) -> AsyncIterator[AsyncSession]:
 SessionDependency = Annotated[AsyncSession, Depends(get_session)]
 
 
-def get_task_service(
+async def get_task_service(
     request: Request,
     session: SessionDependency,
 ) -> TaskService:
     logger = request.app.state.logger
+    repository = getattr(request.app.state, "task_repository", None)
     return TaskService(
         session=session,
         id_generator=request.app.state.task_id_generator,
@@ -28,4 +29,5 @@ def get_task_service(
         object_storage_client=request.app.state.object_storage_client,
         queue_client=request.app.state.queue_client,
         trace_id=request.state.trace_id,
+        repository=repository,
     )
