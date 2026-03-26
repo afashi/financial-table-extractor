@@ -44,3 +44,56 @@
 ### Next Steps
 
 - None - task complete
+
+
+## Session 2: Bootstrap backend guidelines
+
+**Date**: 2026-03-26
+**Task**: Bootstrap backend guidelines
+
+### Summary
+
+(Add summary)
+
+### Main Changes
+
+| Area | Description |
+|------|-------------|
+| Backend specs | Replaced Trellis backend template docs with project-specific guidance based on the actual codebase. |
+| Architecture | Documented the real `core_service` / `parser_service` / `shared` split and where APIs, services, repositories, clients, schemas, and shared utilities belong. |
+| Database | Captured the current SQLAlchemy async + Alembic conventions, including `t_task`, index naming, session ownership, and migration expectations. |
+| Error and logging | Documented `AppError`, boundary exceptions, worker failure handling, JSON structured logging, and stable log fields. |
+| Quality bar | Recorded the backend review and testing baseline, including Ruff, pytest, fake adapters, and contract-sync expectations. |
+| Task tracking | Finished and archived the bootstrap Trellis task so future sessions start from the updated spec baseline. |
+
+**Verification**:
+- `./.venv/bin/python -m ruff check apps alembic tests`
+- `timeout 60 ./.venv/bin/python -m pytest -q`
+- Result: `10 passed`
+
+**Updated Files**:
+- `.trellis/spec/backend/index.md`
+- `.trellis/spec/backend/directory-structure.md`
+- `.trellis/spec/backend/database-guidelines.md`
+- `.trellis/spec/backend/error-handling.md`
+- `.trellis/spec/backend/logging-guidelines.md`
+- `.trellis/spec/backend/quality-guidelines.md`
+
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `ea2741b` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
