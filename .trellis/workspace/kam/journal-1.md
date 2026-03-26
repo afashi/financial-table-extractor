@@ -69,3 +69,36 @@ Implemented the first backend MVP slice: FastAPI core-service scaffold, PostgreS
 ### Next Steps
 
 - None - task complete
+
+
+## Session 3: Parser service skeleton and route contract cleanup
+
+**Date**: 2026-03-23
+**Task**: Parser service skeleton and route contract cleanup
+
+### Summary
+
+Completed parser queue consumer skeleton, MinIO and Redis dispatch, PARSING/PARSED/FAILED status writeback, /api/v1/tasks/{task_id} contract unification, and executable backend code-spec updates.
+
+### Main Changes
+
+(Add details)
+
+### Git Commits
+
+| Hash | Message |
+|------|---------|
+| `1c298b8` | (see git log) |
+| `e107871` | (see git log) |
+
+### Testing
+
+- [OK] (Add test results)
+
+### Status
+
+[OK] **Completed**
+
+### Next Steps
+
+- None - task complete
