@@ -6,15 +6,18 @@
 
 ## Overview
 
-The backend has not been implemented yet, but the project design already fixes
-the main service boundaries:
+The backend is organized by service boundary first, then by responsibility
+inside each service. The current repository structure is already the baseline
+to follow:
 
-- A CPU-side core service owns API handling, task orchestration, routing,
-  normalization, confidence scoring, persistence, and traceability APIs.
-- A GPU-side parser service owns MinerU execution and parse artifact creation.
-- Shared code should be limited to stable contracts, enums, and utilities.
-
-The layout below is the target structure future backend code should follow.
+- `apps/core_service/app/` owns FastAPI setup, request-scoped dependencies, task
+  APIs, infrastructure clients, repositories, and task orchestration.
+- `apps/parser_service/app/` owns the parser worker loop and parser-engine
+  implementation.
+- `apps/shared/` holds stable enums and low-level utilities that are safe to
+  reuse across both services.
+- `tests/` mirrors service boundaries and relies on fake adapters instead of
+  real infrastructure.
 
 ---
 
@@ -22,79 +25,97 @@ The layout below is the target structure future backend code should follow.
 
 ```text
 apps/
-├── core-service/
-│   ├── app/
-│   │   ├── api/
-│   │   ├── workers/
-│   │   ├── pipelines/
-│   │   ├── services/
-│   │   ├── repositories/
-│   │   ├── schemas/
-│   │   ├── strategies/
-│   │   ├── clients/
-│   │   └── settings.py
-│   └── tests/
-├── parser-service/
-│   ├── app/
-│   │   ├── consumers/
-│   │   ├── services/
-│   │   ├── schemas/
-│   │   ├── clients/
-│   │   └── settings.py
-│   └── tests/
+├── core_service/
+│   └── app/
+│       ├── api/
+│       │   ├── dependencies.py
+│       │   ├── router.py
+│       │   └── routes/
+│       ├── clients/
+│       ├── db/
+│       │   ├── base.py
+│       │   └── models/
+│       ├── repositories/
+│       ├── schemas/
+│       ├── services/
+│       ├── utils/
+│       ├── errors.py
+│       ├── logging_config.py
+│       ├── main.py
+│       └── settings.py
+├── parser_service/
+│   └── app/
+│       ├── schemas/
+│       ├── services/
+│       ├── main.py
+│       └── settings.py
 └── shared/
-    ├── contracts/
     ├── enums/
     └── utils/
+
+alembic/
+└── versions/
+
+tests/
+├── conftest.py
+├── core_service/
+└── parser_service/
 ```
 
 ---
 
 ## Module Organization
 
-- Put HTTP endpoints only in `api/`. They validate input, invoke application
-  services, and return task-oriented responses. They should not run parsing or
-  table extraction logic inline.
-- Put queue consumers and asynchronous job entry points in `workers/` or
-  `consumers/`. They map external events to pipeline calls and status updates.
-- Put extraction, routing, normalization, and confidence logic in `pipelines/`
-  and `services/`, not inside route handlers or repositories.
-- Put persistence code in `repositories/`. Repository code should know SQL and
-  table layout, but not extraction business rules.
-- Put Pydantic request, response, event, and artifact models in `schemas/`.
-- Put table-specific cleanup or reshaping code in `strategies/`. This matches
-  the pluggable transformation engine described in the design.
-- Keep third-party integration wrappers in `clients/` for PostgreSQL, Redis,
-  MinIO, MinerU, and the LLM gateway.
-- Keep `shared/` intentionally small. If a module is only used by one service,
-  keep it local to that service.
+- Put HTTP routing and dependency wiring under `apps/core_service/app/api/`.
+  Route functions should stay thin and delegate to services.
+- Put business workflow orchestration under `apps/core_service/app/services/`.
+  `TaskService` is the current reference for "service owns flow + transaction
+  boundary + logging".
+- Put direct persistence logic under `apps/core_service/app/repositories/`.
+  Repository methods accept an `AsyncSession` and do not own commits.
+- Put infrastructure adapters under `apps/core_service/app/clients/`.
+  The base class and the concrete implementation live together in the same
+  module today, for example `queue.py` and `object_storage.py`.
+- Put SQLAlchemy metadata and models under `apps/core_service/app/db/`.
+  Keep `base.py` small and import concrete models through
+  `apps/core_service/app/db/models/__init__.py`.
+- Put Pydantic request, response, and queue contracts under
+  `apps/core_service/app/schemas/`.
+- Put parser-specific runtime logic under `apps/parser_service/app/services/`.
+  The parser service currently reuses shared task contracts and infrastructure
+  adapters from `core_service` instead of duplicating them.
+- Keep only truly shared pieces in `apps/shared/`, such as `DocumentType`,
+  `TaskStatus`, and `SnowflakeIdGenerator`.
 
 ---
 
 ## Naming Conventions
 
-- Use `snake_case` for Python modules, packages, and functions.
-- Use explicit entrypoint names such as `main.py`, `worker.py`, and
-  `settings.py`.
-- Use suffixes that reveal boundary intent:
-  - `*Request`, `*Response`, `*Event`, `*Artifact` for schemas
-  - `*_repository.py` for database access
-  - `*_client.py` for third-party integrations
-  - `*_strategy.py` for post-processing plugins
-- Name pipeline modules after a phase or capability, for example
-  `semantic_routing.py`, `normalization.py`, or `confidence_scoring.py`.
-- Keep service names aligned with the architecture terms already used in the
-  project documents: `core-service`, `parser-service`, `traceability`, and
-  `transformation`.
+- Use `snake_case` for packages, modules, functions, and helper names.
+- Use explicit file names that reveal responsibility:
+  - `task_service.py` for orchestration logic
+  - `task_repository.py` for database access
+  - `queue.py` and `object_storage.py` for integration adapters
+  - `settings.py` for environment-backed configuration
+  - `logging_config.py` for logger setup
+- Keep route modules grouped by resource, for example
+  `apps/core_service/app/api/routes/tasks.py`.
+- Name Pydantic schemas by boundary intent, for example
+  `TaskSubmissionResponse`, `TaskReadResponse`, `ParserTaskMessage`, and
+  `ErrorResponse`.
+- Keep object-key builders and hashing helpers in `utils/` only when they are
+  pure, boundary-agnostic helpers.
 
 ---
 
 ## Examples
 
-Use these project artifacts as the current structural references until real code
-exists:
-
-- `design.md`: sections "3.1" and "3.2" define the CPU/GPU service split.
-- `design.md`: section "4.1" defines the phase-based backend workflow.
-- `table-schema.md`: defines which concerns belong in the relational model
-  rather than object storage.
+- `apps/core_service/app/main.py`: application assembly, middleware, lifespan,
+  and global exception handlers.
+- `apps/core_service/app/services/task_service.py`: service-layer reference for
+  dependency injection, transaction ownership, and structured logging.
+- `apps/parser_service/app/services/parser_worker.py`: worker-side reference for
+  queue consumption, task-state transitions, and infrastructure failure
+  handling.
+- `tests/conftest.py`: canonical testing layout with fake object storage, queue,
+  database client, and repository implementations.

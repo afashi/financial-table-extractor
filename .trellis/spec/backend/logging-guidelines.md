@@ -6,90 +6,105 @@
 
 ## Overview
 
-The backend is an asynchronous multi-service pipeline. Logs must therefore be
-structured enough to answer these questions quickly:
+The project uses the standard `logging` module with a custom JSON formatter in
+`apps/core_service/app/logging_config.py`.
 
-- Which task is this log line about?
-- Which service and phase produced it?
-- Was the issue caused by storage, parsing, routing, fallback, normalization, or
-  persistence?
-- Can the operator safely retry?
+- Logs are emitted as JSON strings.
+- `configure_logging(level_name)` is shared by both services.
+- Operational context is passed through `extra={...}` fields instead of being
+  embedded into the message string.
 
-The logging library has not been selected yet, but the output format must be
-structured JSON or equivalent key-value logs.
+This is required because the system crosses HTTP, database, Redis, MinIO, and
+worker boundaries.
 
 ---
 
 ## Log Levels
 
-- `DEBUG`: detailed scoring inputs, rule matching traces, and other diagnostic
-  data used during development or controlled incident debugging.
-- `INFO`: task accepted, dedup hit, queue publish, parser started/completed,
-  extraction completed, result persisted, review queue transition.
-- `WARN`: fallback path triggered, missing unit metadata, degraded confidence,
-  partial retrigger, unexpected but recoverable data shape.
-- `ERROR`: unrecoverable dependency failure, contract violation, parser failure,
-  or status transition that leaves the task unusable.
+- `INFO`
+  - normal lifecycle events such as task creation, dedup hits, task dispatch,
+    parser start, parser completion, and parser-service startup
+- `WARNING`
+  - client or boundary issues that are expected and recoverable in-process, such
+    as `AppError`, request validation failures, or queue messages referencing a
+    missing task
+- `ERROR`
+  - unrecoverable dependency failures or task lifecycle failures, such as queue
+    publish failures, parser download failures, parse failures, or database
+    writeback failures
+- `DEBUG`
+  - not used heavily yet, but reserved for temporary low-level diagnostics
 
 ---
 
 ## Structured Logging
 
-Every production log should include the fields that make async tracing possible:
+Every log line starts with the formatter-provided fields:
+
+- `timestamp`
+- `level`
+- `logger`
+- `message`
+
+When adding backend logs, keep these extra fields stable whenever they apply:
 
 - `service`
 - `phase`
 - `event`
 - `task_id`
-- `doc_type`
 - `trace_id`
-- `duration_ms` when relevant
-
-Add boundary-specific fields when useful:
-
+- `doc_type`
 - `queue_name`
 - `object_key`
-- `rule_id`
-- `target_table_code`
-- `confidence_score`
-- `retry_count`
+- `code`
+- `reason`
 
-Keep log field names stable across services so task traces can be correlated
-without custom parsing for each subsystem.
+Do not build ad hoc keys for the same concept in different files. For example,
+use `task_id`, not `taskId` in one place and `job_id` in another.
 
 ---
 
 ## What to Log
 
-- API intake: file hash, file size, doc type, dedup hit or miss, created task ID.
-- Queue activity: publish and consume events for parser and extractor workers.
-- Parser lifecycle: source object key, parse started/completed/failed, artifact
-  validation outcome.
-- Routing and extraction: chapter match results, anchor rule match outcome,
-  fallback trigger reason, extracted target table code.
-- Normalization and scoring: detected unit/currency, confidence penalties, and
-  whether the result entered review.
-- Manual retrigger flows: which target tables were rerun and which records were
-  replaced.
+- Service startup and health-related milestones.
+- Task lifecycle transitions such as `task_created`, `task_deduplicated`,
+  `task_dispatched`, `parse_started`, `parse_completed`, and `parse_failed`.
+- External-boundary failures with enough detail to reproduce the failing call:
+  queue name, object key, failure code, and exception class name.
+- Request and worker correlation data. HTTP flows use the middleware-generated
+  `trace_id`; parser worker flows generate a per-message trace id.
 
 ---
 
 ## What NOT to Log
 
-- Raw PDF bytes or entire PDF text dumps.
-- Full `content_list.json` payloads.
-- Secrets, credentials, tokens, or signed URLs.
-- Full LLM prompts or responses unless they are explicitly redacted and the
-  logging path is temporary and approved.
-- Large extracted financial payloads when a task ID and target table code are
-  enough to locate the data.
+- Raw PDF bytes or full parser artifact payloads.
+- Secrets from settings such as MinIO credentials or database URLs.
+- Entire unredacted validation-error payloads when a summary and structured
+  error list are enough.
+- Duplicate hand-written context in the message string when it already exists in
+  structured fields.
 
 ---
 
 ## Examples
 
-- `design.md`: Phases 0 through 6 define the events that need traceable logs.
-- `requirement.md`: sections 3.6 and 3.7 explain why confidence and BBox data
-  need operator-visible traceability.
-- `table-schema.md`: shows the persistence keys logs should correlate with,
-  especially `task_id`, `target_table_code`, and review state.
+- `apps/core_service/app/logging_config.py`: JSON formatter and idempotent root
+  logger setup.
+- `apps/core_service/app/services/task_service.py`: `task_created`,
+  `task_deduplicated`, `task_dispatched`, and `task_dispatch_failed` log events.
+- `apps/core_service/app/main.py`: HTTP-side warning logs for `AppError` and
+  validation errors.
+- `apps/parser_service/app/services/parser_worker.py`: worker logs for queue
+  payload failures, parser start, parser completion, and parser failure.
+
+---
+
+## Common Mistakes
+
+- Logging only a free-form sentence without `service`, `phase`, `event`, or
+  `trace_id`.
+- Logging secret-bearing configuration values.
+- Using inconsistent event names for the same lifecycle step across services.
+- Emitting large payload dumps instead of stable identifiers such as `task_id`
+  and `object_key`.

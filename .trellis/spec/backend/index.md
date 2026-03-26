@@ -6,17 +6,18 @@
 
 ## Overview
 
-This repository is still in a design-first stage. There is no committed backend
-service implementation yet, so the backend guidelines in this directory are
-bootstrapped from the agreed project artifacts:
+The repository already has a working backend skeleton. The current shape is:
 
-- `requirement.md`
-- `design.md`
-- `table-schema.md`
+- `apps/core_service/app/`: FastAPI HTTP entrypoint, dependency wiring, task
+  submission flow, infrastructure clients, repositories, and API schemas.
+- `apps/parser_service/app/`: long-running parser worker, parser engine, and
+  parser artifact handling.
+- `apps/shared/`: enums and utilities shared across both services.
+- `alembic/`: SQLAlchemy/Alembic migration history for relational schema
+  changes.
 
-Treat these files as the current source of truth for backend conventions until
-real code exists. When implementation lands, replace design-only references with
-real code references as soon as possible.
+These guidelines should describe the current implementation style, not a future
+target architecture.
 
 ---
 
@@ -24,35 +25,43 @@ real code references as soon as possible.
 
 | Guide | Description | Status |
 |-------|-------------|--------|
-| [Directory Structure](./directory-structure.md) | Service boundaries, module layout, file naming | Bootstrapped from design |
-| [Database Guidelines](./database-guidelines.md) | PostgreSQL, pgvector, JSONB, MinIO boundaries | Bootstrapped from schema and design |
+| [Directory Structure](./directory-structure.md) | Service boundaries, module layout, file naming | Project-specific |
+| [Database Guidelines](./database-guidelines.md) | SQLAlchemy async usage, migrations, table naming | Project-specific |
 | [Task Pipeline Contracts](./task-pipeline-contracts.md) | HTTP, queue, MinIO, and task-status contracts for async parser flow | Executable contract |
-| [Error Handling](./error-handling.md) | Task lifecycle failures vs business no-data states | Bootstrapped from workflow design |
-| [Quality Guidelines](./quality-guidelines.md) | Required patterns, forbidden patterns, review gates | Bootstrapped from architecture docs |
-| [Logging Guidelines](./logging-guidelines.md) | Structured logs for async pipeline tracing | Bootstrapped from workflow design |
+| [Error Handling](./error-handling.md) | API errors, dependency boundary errors, worker failure handling | Project-specific |
+| [Quality Guidelines](./quality-guidelines.md) | Required patterns, forbidden patterns, review gates | Project-specific |
+| [Logging Guidelines](./logging-guidelines.md) | JSON logging, required extra fields, log-level usage | Project-specific |
 
 ---
 
 ## Pre-Development Checklist
 
-Read this index first, then read the detailed guides that match the task:
+Read this index first, then read the detailed guides that match the change:
 
-1. `directory-structure.md` for package/service placement.
-2. `database-guidelines.md` for schema, storage, and migration work.
-3. `error-handling.md` and `logging-guidelines.md` for API, queue, and worker flows.
-4. `quality-guidelines.md` before opening a PR or reviewing backend changes.
-5. `../guides/cross-layer-thinking-guide.md` when the change affects API payloads,
-   queue contracts, storage contracts, or the PDF/BBox flow into the frontend.
+1. `directory-structure.md` before adding or moving backend modules.
+2. `database-guidelines.md` before changing SQLAlchemy models, repositories, or
+   Alembic revisions.
+3. `task-pipeline-contracts.md` before changing task submission endpoints, queue
+   payloads, object-key conventions, or task lifecycle transitions.
+4. `error-handling.md` and `logging-guidelines.md` before changing any external
+   boundary, retry path, or worker loop.
+5. `quality-guidelines.md` before review or merge.
+6. `../guides/cross-layer-thinking-guide.md` when a change affects HTTP
+   payloads, queue contracts, object storage paths, or task status values seen
+   by other layers.
 
 ---
 
 ## Scope Reminder
 
-The design establishes a strict split between:
+The backend currently enforces a clear split:
 
-- CPU business services: API gateway, orchestration, routing, normalization,
-  persistence, traceability APIs.
-- GPU parser service: MinerU execution and parse artifact generation only.
+- `core_service` accepts uploads, persists and fetches task state, stores the
+  source PDF, and publishes parser work.
+- `parser_service` consumes queue messages, runs the parser engine, writes the
+  parser artifact, and updates task status.
+- `shared` stays small and only holds stable enums and utilities that both
+  services genuinely need.
 
-Do not collapse those concerns into a single service unless the architecture
-decision is intentionally changed and the design docs are updated together.
+Do not collapse those concerns into route handlers or a catch-all utility
+module.

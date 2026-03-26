@@ -6,88 +6,88 @@
 
 ## Overview
 
-PostgreSQL is the system of record for business data, task state, routing rules,
-and extracted results. `pgvector` is part of the relational data model for
-semantic matching. MinIO stores large binary or semi-structured artifacts such
-as source PDFs, `content_list.json`, and optional slice images.
+The current backend uses SQLAlchemy 2.x async APIs for runtime access and
+Alembic for schema changes.
 
-Current schema contracts are documented in `table-schema.md`. Until migrations
-and implementation code exist, that file is the authoritative database contract.
+- Runtime engine and session factory live in
+  `apps/core_service/app/clients/database.py`.
+- Declarative metadata lives in `apps/core_service/app/db/base.py`.
+- Concrete models live in `apps/core_service/app/db/models/`.
+- Migrations live in `alembic/versions/`.
+
+The current relational schema is intentionally small: `t_task` stores task
+identity and lifecycle state, while large binary artifacts remain in object
+storage.
 
 ---
 
 ## Query Patterns
 
-- Always deduplicate uploads by the full `(file_hash, file_size, doc_type)`
-  tuple before a new task is queued. This is part of the business contract, not
-  an optimization.
-- Store large parse artifacts in MinIO and keep only stable references and
-  extracted business data in PostgreSQL.
-- Use scalar columns for high-value query predicates such as `task_id`,
-  `target_table_code`, `status`, `needs_review`, and page ranges. Use `JSONB`
-  for semi-structured payloads such as `path_fingerprints`, `anchor_rule`,
-  `table_data`, `fix_table_data`, and `bbox`.
-- Treat `content_list.json` as a read-only canonical parser artifact. Downstream
-  phases may derive logical tables in memory, but they should not mutate and
-  write back the canonical artifact.
-- Re-trigger flows should update only the affected extraction rows for the
-  target table set. Do not rewrite unrelated rows for the same task.
-- Keep rule matching thresholds, status enums, and confidence inputs explicit in
-  the schema or application layer. Do not bury critical business semantics in
-  opaque JSON only.
+- Keep `AsyncSession` ownership in the service or worker layer. Repository
+  methods accept a session object; they do not create sessions internally.
+- Use `session.get(Model, primary_key)` for direct primary-key lookups, as shown
+  in `apps/core_service/app/repositories/task_repository.py`.
+- Use explicit `select(...)` queries for non-primary-key reads. The task
+  deduplication lookup uses `select(Task).where(...)` on the fingerprint tuple.
+- Use `session.add(...)`, then `flush()` and `refresh()` inside repository
+  methods to materialize generated state before returning.
+- Keep `commit()` and `rollback()` in the caller that owns the business flow.
+  `TaskService` and `ParserWorker` both follow this rule.
+- Persist enum values as stable strings. `Task.status` and `Task.doc_type` are
+  stored as `String(...)` columns and mapped back to `StrEnum` values in schema
+  or service code.
+- Keep timestamps timezone-aware and UTC-based. The `Task` model uses
+  `DateTime(timezone=True)` and `utc_now()`.
 
 ---
 
 ## Migrations
 
-- No migration tool is committed yet. Until one is added, `table-schema.md` is
-  the canonical schema document and must be updated in the same change as any
-  schema decision.
-- When migrations are introduced, prefer forward-only changes and idempotent
-  backfills.
-- Split structural changes from data backfills when possible. This is important
-  for large JSONB and vector indexes.
-- Any schema PR must update all impacted artifacts together:
-  - `table-schema.md`
-  - API payload examples in `design.md`
-  - any sample `rule.json` or `extracted_result.json` contracts
+- Create schema changes with Alembic under `alembic/versions/`.
+- Keep `alembic/env.py` aligned with the current model package imports. New
+  models must be imported into `apps/core_service/app/db/models/__init__.py`
+  and reachable from `Base.metadata`.
+- Prefer explicit migration operations such as `op.create_table(...)`,
+  `op.create_index(...)`, and `sa.text(...)` defaults over opaque raw SQL.
+- Keep upgrade and downgrade paths in the same revision file. The current
+  `20260323_0001_create_t_task.py` migration is the reference.
+- Run Alembic through the project virtual environment so it uses the same
+  settings module and dependency set as the app.
 
 ---
 
 ## Naming Conventions
 
-- Use `snake_case` for table names, column names, indexes, and constraints.
-- Keep the current `t_` prefix for business tables because it is already part of
-  the documented schema (`t_task`, `t_document_toc`, `t_table_extraction_rule`,
-  `t_extracted_result`).
-- Keep index names descriptive and stable, for example `idx_t_result_task` or
-  `idx_t_rule_vector`.
-- Keep timestamp columns timezone-aware and suffix them with `_time`.
-- Keep business status values explicit and uppercase, such as `QUEUED`,
-  `PARSING`, `PARSED`, `FAILED`, `COMPLETED`, and `PENDING_REVIEW`.
-- The current schema uses string flags such as `'0'` and `'1'` for some fields.
-  Do not mix those with booleans ad hoc. If the project later migrates to proper
-  booleans, do it systematically across schema, API, and frontend contracts.
+- Use `snake_case` for tables, columns, indexes, and revision files.
+- Use the `t_` prefix for business tables. The current task table is `t_task`.
+- Use `idx_<table>_<fields>` for indexes. The deduplication index is
+  `idx_t_task_hash_size_doc_type`.
+- Use `_time` suffixes for persisted timestamps, for example `create_time` and
+  `update_time`.
+- Keep externally visible lifecycle values uppercase and stable. Current task
+  states come from `apps/shared/enums/task_status.py`.
 
 ---
 
 ## Examples
 
-- `table-schema.md`: concrete table, column, and index naming rules.
-- `design.md`: Phase 0 and Phase 5 show how task rows and extraction result rows
-  evolve over time.
-- `requirement.md`: sections 3.4 through 3.7 define business semantics that must
-  survive persistence (`NOT_DISCLOSED`, `NOT_FIND`, unit normalization,
-  confidence score, BBox traceability).
+- `apps/core_service/app/clients/database.py`: async engine construction with
+  `pool_pre_ping=True` and an `async_sessionmaker`.
+- `apps/core_service/app/db/models/task.py`: canonical model layout, naming, and
+  UTC timestamp defaults.
+- `apps/core_service/app/repositories/task_repository.py`: repository methods
+  with `session.get`, `select`, `flush`, and `refresh`.
+- `alembic/versions/20260323_0001_create_t_task.py`: reference migration
+  structure and index naming.
 
 ---
 
 ## Common Mistakes
 
-- Storing raw PDFs or the full parser artifact in PostgreSQL instead of MinIO.
-- Collapsing `null`, `NOT_DISCLOSED`, and `NOT_FIND` into one generic empty
-  value.
-- Mutating the canonical parser artifact rather than deriving a new logical
-  representation for downstream phases.
-- Hiding frequently queried fields inside `JSONB` when they need indexes or
-  stable API contracts.
+- Committing or rolling back inside repository methods. That hides transaction
+  boundaries from the business flow.
+- Storing parser artifacts in PostgreSQL instead of object storage. The current
+  design keeps PDFs and `content_list.json` outside the relational database.
+- Adding a new model without importing it into `apps/core_service/app/db/models`
+  and `alembic/env.py`, which makes Alembic autogeneration incomplete.
+- Bypassing the shared enums and writing ad hoc status strings into the database.

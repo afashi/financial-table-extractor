@@ -6,76 +6,89 @@
 
 ## Overview
 
-Backend quality in this project is mostly about preserving architectural
-boundaries and business correctness. Financial extraction is a low-tolerance
-domain; a small semantic shortcut can be more dangerous than a crash.
+Backend quality in this project is defined by a few concrete rules:
 
-Because the repository is still at the bootstrap stage, treat these guidelines
-as the minimum bar for the first implementation.
+- keep service boundaries explicit
+- expose failures instead of hiding them behind fallbacks
+- separate orchestration, persistence, and infrastructure adapters
+- keep contracts stable across HTTP, queue, database, and object storage
+- prove behavior with automated tests
+
+Project-wide guardrails in `AGENTS.md` also apply here, including limits on
+function size, nesting, cyclomatic complexity, magic numbers, and the
+debug-first "no silent fallbacks" policy.
 
 ---
 
 ## Forbidden Patterns
 
-- Running MinerU parsing work inside the HTTP request/response thread.
-- Mixing parser-service responsibilities with core-service business logic.
-- Treating `NOT_DISCLOSED`, `NOT_FIND`, and `null` as interchangeable.
-- Hard-coding confidence thresholds or unit defaults in multiple places.
-- Writing one monolithic extraction function that mixes routing, extraction,
-  normalization, persistence, and traceability.
-- Mutating the canonical parser artifact after it is written to object storage.
-- Returning ad hoc status strings that do not match the documented task or data
-  status values.
+- Putting orchestration logic directly in FastAPI route handlers.
+- Committing database transactions inside repositories instead of the owning
+  service or worker flow.
+- Constructing queue payloads or object-storage keys inline in multiple places
+  when shared helpers or schemas already exist.
+- Returning numeric task IDs in public JSON responses. The API contract uses
+  decimal strings to avoid precision issues in other runtimes.
+- Catching broad exceptions only to return fake success or swallow the failure.
+- Duplicating stable shared contracts across `core_service`, `parser_service`,
+  and `shared`.
 
 ---
 
 ## Required Patterns
 
-- Preserve the documented phase boundaries from `design.md`.
-- Validate every boundary payload with explicit schemas.
-- Keep persistence, business logic, and third-party integration concerns in
-  separate modules.
-- Make confidence penalties explicit and reviewable.
-- Keep the rule-first, model-fallback behavior deterministic and auditable.
-- Register special-case post-processing through a strategy mechanism instead of
-  sprinkling table-specific exceptions across the pipeline.
-- Keep deduplication and partial re-trigger flows idempotent.
+- Use dependency injection through `create_app(...)`, request dependencies, or
+  constructor parameters. `TaskService` and `ParserWorker` are the reference
+  implementations.
+- Use explicit Pydantic models for boundary payloads such as
+  `ParserTaskMessage`, `TaskSubmissionResponse`, and `ErrorResponse`.
+- Keep pure helpers in `utils/` and keep them side-effect free.
+- Convert third-party exceptions into project-specific boundary errors close to
+  the integration point.
+- Use shared enums (`DocumentType`, `TaskStatus`) instead of ad hoc strings in
+  business logic.
+- Keep fake adapters in tests instead of relying on live PostgreSQL, Redis, or
+  MinIO for normal unit/integration coverage.
 
 ---
 
 ## Testing Requirements
 
-- No runnable project stack is committed yet, so bootstrap changes should at
-  least pass syntax review, import review, type review, and contract review.
-- The first backend implementation should add unit tests for:
-  - routing rule evaluation
-  - null and no-data normalization
-  - confidence score calculation
-  - transformation strategy selection
-- Add integration tests for task lifecycle transitions and partial retrigger
-  flows.
-- Add contract tests against the documented `rule.json` and
-  `extracted_result.json` formats.
+- Run Ruff before finishing backend work. Current project command:
+  `python3 -m ruff check apps alembic tests`
+- Run pytest for backend verification. Current project command:
+  `python3 -m pytest -q`
+- Keep task lifecycle behavior covered with tests. The current baseline includes:
+  - fresh upload and fetch flow
+  - duplicate dedup flow
+  - failed dispatch persistence
+  - parser worker `QUEUED -> PARSING -> PARSED`
+  - parser worker failure paths for parse and storage errors
+- When changing a contract, update the executable contract doc and the
+  corresponding tests in the same change.
 
 ---
 
 ## Code Review Checklist
 
-- Does the change preserve the CPU/GPU service split?
-- Are schema, API, and storage contracts updated together?
-- Are task statuses and data statuses still unambiguous?
-- Is low-confidence handling still visible and deterministic?
-- Are logs structured enough to debug a task end to end?
-- Does the code avoid mutating canonical parser artifacts?
-- Can the flow be retried without corrupting task state or duplicating results?
+- Does the change preserve the current service split between `core_service` and
+  `parser_service`?
+- Are route handlers still thin and delegating to services?
+- Are transaction boundaries explicit and still owned by the orchestration
+  layer?
+- Are task status transitions, error codes, and failure remarks still stable?
+- Do logs still include enough structured fields to trace a task end to end?
+- Are shared helpers and schemas reused instead of reimplemented?
+- Are Ruff and pytest still green?
 
 ---
 
 ## Examples
 
-- `requirement.md`: sections 3.3 through 3.7 define the user-visible accuracy
-  and traceability bar.
-- `design.md`: section 4.2.1 defines the partial re-trigger workflow that review
-  logic must preserve.
-- `table-schema.md`: exposes which fields are critical enough to deserve tests
-  and review focus.
+- `apps/core_service/app/api/routes/tasks.py`: thin routing layer that delegates
+  to `TaskService`.
+- `apps/core_service/app/services/task_service.py`: service-layer ownership of
+  orchestration, commits, rollbacks, and structured logging.
+- `tests/conftest.py`: fake adapters used for repeatable tests without external
+  infrastructure.
+- `pyproject.toml`: authoritative Ruff and pytest configuration.

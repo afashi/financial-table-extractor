@@ -6,98 +6,109 @@
 
 ## Overview
 
-This system is asynchronous and phase-based, so error handling must preserve
-both transport semantics and business semantics:
+The current backend separates errors by boundary:
 
-- Infrastructure or contract failures are real errors and should drive retries,
-  task failure states, or operator attention.
-- Business outcomes such as `NOT_DISCLOSED` and `NOT_FIND` are valid extraction
-  results, not exceptions.
-- Every failure path must preserve task context, current phase, and enough data
-  to diagnose which external boundary failed.
+- `AppError` is the HTTP-facing error type returned by the FastAPI app.
+- `StorageClientError` and `QueueClientError` wrap dependency failures close to
+  the adapter boundary.
+- `QueuePayloadError` marks malformed queue data and is handled inside the
+  worker loop.
+- Parser-engine failures use `ParserEngineError`.
+
+The design goal is explicit failure, not silent fallback. When a boundary fails,
+the code either returns a stable error envelope to the caller or persists task
+state to `FAILED` and logs the reason.
 
 ---
 
 ## Error Types
 
-Use error categories that map cleanly to pipeline boundaries:
-
-- Validation errors: malformed API input, unsupported `doc_type`, invalid queue
-  payloads, invalid parser artifacts, invalid LLM responses.
-- Dependency errors: PostgreSQL, Redis, MinIO, MinerU, or external LLM gateway
-  failures.
-- Workflow errors: illegal state transitions, missing task records, corrupted or
-  missing object storage references.
-- Business result states: `SUCCESS`, `NOT_DISCLOSED`, `NOT_FIND`. These must not
-  be thrown as transport errors.
-
-If custom exception classes are introduced, name them after those boundaries,
-for example `ArtifactValidationError`, `StorageClientError`, or
-`TaskStateConflictError`.
+- `AppError` in `apps/core_service/app/errors.py`
+  - carries `code`, `message`, `status_code`, `retryable`, `details`, and
+    optional `task_id`
+  - is turned into `ErrorResponse` by the global exception handler in
+    `apps/core_service/app/main.py`
+- `DependencyBoundaryError`
+  - base type for adapter-level failures that should not leak raw vendor
+    exceptions
+- `StorageClientError` and `QueueClientError`
+  - wrap MinIO and Redis failures with a stable `reason`
+- `QueuePayloadError`
+  - separates invalid queue data from infrastructure outages
+- `ParserEngineError`
+  - marks parser-specific failures that should transition a task to `FAILED`
 
 ---
 
 ## Error Handling Patterns
 
-- Validate at every external boundary with explicit schemas. API payloads,
-  queue messages, parser artifacts, and LLM output must be treated as untrusted
-  input.
-- Update task status explicitly on parser lifecycle boundaries:
-  - `QUEUED -> PARSING -> PARSED`
-  - `PARSING -> FAILED` on parse failure
-  - `PARSED -> COMPLETED` or `PENDING_REVIEW` after extraction
-- Surface duplicate-upload hits as normal business responses that return the
-  existing task reference, not as hard failures.
-- Treat missing target data carefully:
-  - chapter found but target absent after fallback -> `NOT_DISCLOSED`
-  - chapter not found at all -> `NOT_FIND`
-- Keep retry decisions close to the failing boundary. Storage or queue outages
-  are retryable; malformed artifacts and violated contracts are not.
-- Never swallow errors after only logging them. Persist enough context for the
-  task audit trail and return a stable error code upstream.
+- Validate external input early and raise `AppError` for request-level failures.
+  File upload validation currently happens in both `build_file_fingerprint(...)`
+  and the start of `TaskService.create_extract_task(...)`.
+- Catch library-specific exceptions near the boundary and wrap them in project
+  exceptions with a stable `reason`, as shown in `queue.py` and
+  `object_storage.py`.
+- Roll back the current transaction before translating SQLAlchemy failures into
+  `AppError`. `TaskService` does this for create, fetch, and re-queue flows.
+- When dispatch fails after a task row already exists, persist `TaskStatus.FAILED`
+  and a stable `remark` before re-raising the API error.
+- In worker code, prefer logging plus status writeback over bubbling exceptions
+  into the infinite loop. `ParserWorker` updates task state to `FAILED` and
+  returns control to the caller.
+- Treat invalid queue payloads as explicit errors, but do not crash the worker
+  loop. Log them and discard the bad message.
 
 ---
 
 ## API Error Responses
 
-No final API contract file exists yet, so use a single response envelope when
-the first HTTP endpoints are implemented:
+All HTTP-side failures use `ErrorResponse` from
+`apps/core_service/app/schemas/errors.py`:
 
 ```json
 {
-  "code": "OBJECT_NOT_FOUND",
-  "message": "content_list.json is missing for task 102400001",
-  "task_id": "102400001",
-  "retryable": false,
-  "details": {},
-  "trace_id": "req-102400001"
+  "code": "QUEUE_UNAVAILABLE",
+  "message": "Failed to publish the parser task message.",
+  "task_id": "1234567890",
+  "retryable": true,
+  "details": {
+    "reason": "ConnectionError"
+  },
+  "trace_id": "3d6aa4e3a9f346e2a6b6b7f1c7fd2c50"
 }
 ```
 
-Guidelines:
+Rules:
 
-- Use `4xx` for caller mistakes or invalid inputs.
-- Use `5xx` for dependency outages, internal contract violations, or worker
-  failures.
-- Do not encode long-running extraction status as HTTP exceptions when the task
-  should instead be inspected via its persisted status record.
+- Use `4xx` for caller or validation mistakes, for example
+  `INVALID_FILE_UPLOAD` and `TASK_NOT_FOUND`.
+- Use `503` for dependency outages or database unavailability.
+- Always include `trace_id` in HTTP error responses.
+- Include `task_id` whenever a failure happened after a task was created.
 
 ---
 
 ## Examples
 
-- `design.md`: Phase 1 defines explicit parse success and parse failure events.
-- `design.md`: Phase 3 defines when to return `NOT_DISCLOSED` vs `NOT_FIND`.
-- `requirement.md`: section 3.4 defines the null and no-data semantics that must
-  not be flattened into generic errors.
+- `apps/core_service/app/main.py`: global handlers for `AppError` and
+  `RequestValidationError`.
+- `apps/core_service/app/services/task_service.py`: rollback + translate
+  SQLAlchemy failures, plus persisted failure state for queue and object-storage
+  dispatch errors.
+- `apps/parser_service/app/services/parser_worker.py`: queue payload discard,
+  parser failure handling, and `FAILED` state persistence.
+- `apps/core_service/app/clients/object_storage.py`: vendor-exception wrapping
+  into `StorageClientError`.
 
 ---
 
 ## Common Mistakes
 
-- Returning HTTP 500 for `NOT_FIND` or `NOT_DISCLOSED`.
-- Logging a dependency error without updating task state or storing failure
-  context.
-- Reusing the same catch-all exception for validation failures and retryable
-  infrastructure failures.
-- Losing `task_id`, phase, or target table context in the error path.
+- Raising raw `RedisError`, `SQLAlchemyError`, or MinIO exceptions past the
+  project boundary.
+- Logging a failure without updating task state when the task has already moved
+  into an owned lifecycle.
+- Returning inconsistent `remark` strings for worker failures. The project uses
+  stable remarks that tests assert against.
+- Swallowing queue payload validation problems instead of logging them with a
+  clear code and reason.
