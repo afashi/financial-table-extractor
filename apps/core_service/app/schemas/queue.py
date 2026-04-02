@@ -11,3 +11,10 @@ class ParserTaskMessage(BaseModel):
     file_size: int
     bucket: str
     source_object_key: str
+
+
+class ExtractorTaskMessage(BaseModel):
+    task_id: str
+    doc_type: DocumentType
+    bucket: str
+    content_list_object_key: str

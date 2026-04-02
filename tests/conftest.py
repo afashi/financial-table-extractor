@@ -14,7 +14,7 @@ from apps.core_service.app.clients.queue import QueueClient
 from apps.core_service.app.db.models.task import Task
 from apps.core_service.app.errors import QueueClientError, QueuePayloadError, StorageClientError
 from apps.core_service.app.main import create_app
-from apps.core_service.app.schemas.queue import ParserTaskMessage
+from apps.core_service.app.schemas.queue import ExtractorTaskMessage, ParserTaskMessage
 from apps.core_service.app.settings import Settings
 
 
@@ -87,9 +87,16 @@ class FakeObjectStorageClient(ObjectStorageClient):
 
 
 class FakeQueueClient(QueueClient):
-    def __init__(self, *, queue_name: str = "parser_queue") -> None:
+    def __init__(
+        self,
+        *,
+        queue_name: str = "parser_queue",
+        extractor_queue_name: str = "extractor_queue",
+    ) -> None:
         self.queue_name = queue_name
+        self.extractor_queue_name = extractor_queue_name
         self.messages: list[ParserTaskMessage] = []
+        self.extractor_messages: list[ExtractorTaskMessage] = []
         self.invalid_payloads: list[str] = []
         self.publish_failures_remaining = 0
         self.consume_failures_remaining = 0
@@ -126,6 +133,30 @@ class FakeQueueClient(QueueClient):
             return None
 
         return self.messages.pop(0)
+
+    async def publish_extractor_task(self, message: ExtractorTaskMessage) -> None:
+        if self.publish_failures_remaining > 0:
+            self.publish_failures_remaining -= 1
+            raise QueueClientError(
+                f"Failed to publish queue message to '{self.extractor_queue_name}'.",
+                reason="FakePublishFailure",
+            )
+
+        self.extractor_messages.append(message)
+
+    async def consume_extractor_task(self, *, timeout_seconds: int) -> ExtractorTaskMessage | None:
+        del timeout_seconds
+        if self.consume_failures_remaining > 0:
+            self.consume_failures_remaining -= 1
+            raise QueueClientError(
+                f"Failed to consume queue message from '{self.extractor_queue_name}'.",
+                reason="FakeConsumeFailure",
+            )
+
+        if not self.extractor_messages:
+            return None
+
+        return self.extractor_messages.pop(0)
 
 
 class FakeAsyncSession:
@@ -234,6 +265,7 @@ async def test_app() -> AsyncIterator:
         task_id_node_id=7,
         minio_bucket=object_storage_client.bucket_name,
         parser_queue_name=queue_client.queue_name,
+        extractor_queue_name=queue_client.extractor_queue_name,
     )
     app = create_app(
         settings,

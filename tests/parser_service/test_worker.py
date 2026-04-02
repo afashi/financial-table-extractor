@@ -68,6 +68,25 @@ async def test_parser_worker_marks_task_parsing_then_parsed(async_client, test_a
     assert json.loads(artifact_upload.data.decode("utf-8"))[0]["text"] == "parsed"
 
 
+async def test_parser_worker_emits_extractor_message(async_client, test_app) -> None:
+    response = await async_client.post(
+        "/api/v1/extract",
+        data={"doc_type": "ANNUAL_REPORT"},
+        files={"file": ("handoff.pdf", b"%PDF-1.7\nhandoff", "application/pdf")},
+    )
+    payload = response.json()
+
+    worker = build_worker(test_app, SkeletonParserEngine())
+    assert await worker.process_next_message(timeout_seconds=0) is True
+
+    assert len(test_app.state.queue_client.extractor_messages) == 1
+    message = test_app.state.queue_client.extractor_messages[0]
+    assert message.task_id == payload["task_id"]
+    assert message.doc_type == "ANNUAL_REPORT"
+    assert message.bucket == test_app.state.object_storage_client.bucket_name
+    assert message.content_list_object_key == build_content_list_object_key(int(payload["task_id"]))
+
+
 async def test_parser_worker_marks_task_failed_on_parse_error(async_client, test_app) -> None:
     response = await async_client.post(
         "/api/v1/extract",

@@ -10,7 +10,7 @@ from apps.core_service.app.clients.queue import QueueClient
 from apps.core_service.app.db.models.task import Task
 from apps.core_service.app.errors import QueueClientError, QueuePayloadError, StorageClientError
 from apps.core_service.app.repositories.task_repository import TaskRepository
-from apps.core_service.app.schemas.queue import ParserTaskMessage
+from apps.core_service.app.schemas.queue import ExtractorTaskMessage, ParserTaskMessage
 from apps.core_service.app.utils.object_storage import build_content_list_object_key
 from apps.parser_service.app.services.parser_engine import ParserEngine, ParserEngineError
 from apps.shared.enums.task_status import TaskStatus
@@ -130,6 +130,25 @@ class ParserWorker:
             )
             return True
 
+        extractor_message = ExtractorTaskMessage(
+            task_id=message.task_id,
+            doc_type=message.doc_type,
+            bucket=message.bucket,
+            content_list_object_key=artifact_key,
+        )
+        try:
+            await self._queue_client.publish_extractor_task(extractor_message)
+        except QueueClientError as exc:
+            await self._mark_failed(
+                task.id,
+                remark="Failed to publish extractor task message.",
+                trace_id=trace_id,
+                code="QUEUE_UNAVAILABLE",
+                reason=exc.reason,
+                queue_name=self._queue_client.extractor_queue_name,
+            )
+            return True
+
         await self._mark_parsed(task.id, trace_id=trace_id, artifact_key=artifact_key)
         return True
 
@@ -227,6 +246,7 @@ class ParserWorker:
         trace_id: str,
         code: str,
         reason: str,
+        queue_name: str | None = None,
     ) -> None:
         async with self._session_factory() as session:
             try:
@@ -263,7 +283,7 @@ class ParserWorker:
                 "event": "parse_failed",
                 "task_id": task_id,
                 "trace_id": trace_id,
-                "queue_name": self._queue_client.queue_name,
+                "queue_name": queue_name or self._queue_client.queue_name,
                 "code": code,
                 "reason": reason,
             },

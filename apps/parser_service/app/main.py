@@ -26,6 +26,7 @@ async def run(settings: Settings | None = None) -> None:
     queue_client = RedisQueueClient(
         redis_url=app_settings.redis_url,
         queue_name=app_settings.parser_queue_name,
+        extractor_queue_name=app_settings.extractor_queue_name,
     )
     worker = ParserWorker(
         session_factory=database_client.session_factory,
