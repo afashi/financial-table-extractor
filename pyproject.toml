@@ -27,6 +27,7 @@ dev = [
 [project.scripts]
 financial-table-extractor = "apps.core_service.app.main:main"
 financial-table-parser = "apps.parser_service.app.main:main"
+financial-table-extractor-worker = "apps.core_service.app.extractor_main:main"
 
 [build-system]
 requires = ["hatchling>=1.27.0"]

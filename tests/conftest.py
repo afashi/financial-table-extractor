@@ -1,6 +1,7 @@
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from decimal import Decimal
 
 import pytest
 from httpx import ASGITransport, AsyncClient
@@ -11,6 +12,8 @@ from apps.core_service.app.clients.object_storage import (
     StoredObjectRef,
 )
 from apps.core_service.app.clients.queue import QueueClient
+from apps.core_service.app.db.models.extracted_result import ExtractedResult
+from apps.core_service.app.db.models.table_extraction_rule import TableExtractionRule
 from apps.core_service.app.db.models.task import Task
 from apps.core_service.app.errors import QueueClientError, QueuePayloadError, StorageClientError
 from apps.core_service.app.main import create_app
@@ -246,6 +249,64 @@ class FakeTaskRepository:
         return task
 
 
+class FakeTableExtractionRuleRepository:
+    def __init__(self) -> None:
+        self.rules: list[TableExtractionRule] = []
+
+    async def list_active_by_doc_type(self, session, *, doc_type: str) -> list[TableExtractionRule]:
+        del session
+        normalized_doc_type = _enum_value(doc_type)
+        return [
+            rule
+            for rule in self.rules
+            if _enum_value(rule.doc_type) == normalized_doc_type and rule.is_active == "1"
+        ]
+
+
+class FakeExtractedResultRepository:
+    def __init__(self) -> None:
+        self.rows: list[ExtractedResult] = []
+
+    async def upsert_placeholder_not_find(
+        self,
+        session,
+        *,
+        result_id: int,
+        task_id: int,
+        rule: TableExtractionRule,
+        remark: str,
+    ) -> ExtractedResult:
+        del session
+        for row in self.rows:
+            if row.task_id == task_id and row.rule_id == rule.id:
+                row.remark = remark
+                row.update_time = _utc_now()
+                return row
+
+        row = ExtractedResult(
+            id=result_id,
+            task_id=task_id,
+            rule_id=rule.id,
+            target_table_code=rule.target_table_code,
+            unit=None,
+            currency=None,
+            extraction_route=None,
+            data_status="NOT_FIND",
+            table_data=None,
+            fix_table_data=None,
+            start_page=None,
+            end_page=None,
+            bbox=None,
+            confidence_score=Decimal("100.00"),
+            needs_review="0",
+            remark=remark,
+            create_time=datetime.now(UTC),
+            update_time=datetime.now(UTC),
+        )
+        self.rows.append(row)
+        return row
+
+
 def _utc_now() -> datetime:
     return datetime.now(UTC)
 
@@ -260,6 +321,8 @@ async def test_app() -> AsyncIterator:
     object_storage_client = FakeObjectStorageClient()
     queue_client = FakeQueueClient()
     task_repository = FakeTaskRepository()
+    rule_repository = FakeTableExtractionRuleRepository()
+    result_repository = FakeExtractedResultRepository()
     settings = Settings(
         database_url="sqlite+aiosqlite:///unused.db",
         task_id_node_id=7,
@@ -274,6 +337,8 @@ async def test_app() -> AsyncIterator:
         queue_client=queue_client,
     )
     app.state.task_repository = task_repository
+    app.state.rule_repository = rule_repository
+    app.state.result_repository = result_repository
 
     async with app.router.lifespan_context(app):
         yield app
