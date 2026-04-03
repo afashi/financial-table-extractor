@@ -1,0 +1,190 @@
+import json
+import logging
+from collections.abc import Callable
+from uuid import uuid4
+
+from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
+from apps.core_service.app.clients.object_storage import ObjectStorageClient
+from apps.core_service.app.clients.queue import QueueClient
+from apps.core_service.app.errors import QueueClientError, QueuePayloadError, StorageClientError
+from apps.core_service.app.repositories.extracted_result_repository import (
+    ExtractedResultRepository,
+)
+from apps.core_service.app.repositories.table_extraction_rule_repository import (
+    TableExtractionRuleRepository,
+)
+from apps.core_service.app.repositories.task_repository import TaskRepository
+from apps.shared.enums.task_status import TaskStatus
+from apps.shared.utils.snowflake import SnowflakeIdGenerator
+
+
+class ExtractorWorker:
+    def __init__(
+        self,
+        *,
+        session_factory: async_sessionmaker[AsyncSession],
+        object_storage_client: ObjectStorageClient,
+        queue_client: QueueClient,
+        logger: logging.Logger,
+        task_repository: TaskRepository,
+        rule_repository: TableExtractionRuleRepository,
+        result_repository: ExtractedResultRepository,
+        id_generator: SnowflakeIdGenerator,
+        trace_id_factory: Callable[[], str] | None = None,
+    ) -> None:
+        self._session_factory = session_factory
+        self._object_storage_client = object_storage_client
+        self._queue_client = queue_client
+        self._logger = logger
+        self._task_repository = task_repository
+        self._rule_repository = rule_repository
+        self._result_repository = result_repository
+        self._id_generator = id_generator
+        self._trace_id_factory = trace_id_factory or (lambda: uuid4().hex)
+
+    async def process_next_message(self, *, timeout_seconds: int) -> bool:
+        try:
+            message = await self._queue_client.consume_extractor_task(
+                timeout_seconds=timeout_seconds
+            )
+        except QueuePayloadError as exc:
+            self._logger.error(
+                "Discarded invalid extractor queue payload.",
+                extra={
+                    "service": "core_service",
+                    "phase": "extract_queue_consume",
+                    "event": "extract_failed",
+                    "task_id": None,
+                    "trace_id": self._trace_id_factory(),
+                    "queue_name": self._queue_client.extractor_queue_name,
+                    "code": "QUEUE_PAYLOAD_INVALID",
+                    "reason": exc.reason,
+                },
+            )
+            return True
+        except QueueClientError:
+            raise
+
+        if message is None:
+            return False
+
+        trace_id = self._trace_id_factory()
+        try:
+            artifact_bytes = await self._object_storage_client.download_bytes(
+                bucket=message.bucket,
+                object_key=message.content_list_object_key,
+            )
+            json.loads(artifact_bytes.decode("utf-8"))
+        except StorageClientError as exc:
+            await self._mark_failed(
+                int(message.task_id),
+                remark="Failed to load parser artifact from object storage.",
+                trace_id=trace_id,
+                code="OBJECT_STORAGE_UNAVAILABLE",
+                reason=exc.reason,
+            )
+            return True
+        except json.JSONDecodeError as exc:
+            await self._mark_failed(
+                int(message.task_id),
+                remark="Parser artifact is not valid JSON.",
+                trace_id=trace_id,
+                code="ARTIFACT_INVALID",
+                reason=exc.__class__.__name__,
+            )
+            return True
+
+        async with self._session_factory() as session:
+            try:
+                task = await self._task_repository.get_by_id(session, int(message.task_id))
+                if task is None:
+                    return True
+
+                rules = await self._rule_repository.list_active_by_doc_type(
+                    session,
+                    doc_type=message.doc_type,
+                )
+                for rule in rules:
+                    await self._result_repository.upsert_placeholder_not_find(
+                        session,
+                        result_id=self._id_generator.next_id(),
+                        task_id=task.id,
+                        rule=rule,
+                        remark="Extraction backbone placeholder result.",
+                    )
+
+                await self._task_repository.set_status(
+                    session,
+                    task,
+                    status=TaskStatus.COMPLETED,
+                    remark=None if rules else "No active extraction rules configured.",
+                )
+                await session.commit()
+            except SQLAlchemyError as exc:
+                await session.rollback()
+                self._logger.error(
+                    "Failed to persist extractor result state.",
+                    extra={
+                        "service": "core_service",
+                        "phase": "extract_complete",
+                        "event": "extract_failed",
+                        "task_id": message.task_id,
+                        "trace_id": trace_id,
+                        "code": "DATABASE_UNAVAILABLE",
+                        "reason": exc.__class__.__name__,
+                    },
+                )
+                return True
+
+        self._logger.info(
+            "Extractor task completed.",
+            extra={
+                "service": "core_service",
+                "phase": "extract_complete",
+                "event": "extract_completed",
+                "task_id": message.task_id,
+                "trace_id": trace_id,
+                "queue_name": self._queue_client.extractor_queue_name,
+                "object_key": message.content_list_object_key,
+            },
+        )
+        return True
+
+    async def _mark_failed(
+        self,
+        task_id: int,
+        *,
+        remark: str,
+        trace_id: str,
+        code: str,
+        reason: str,
+    ) -> None:
+        async with self._session_factory() as session:
+            try:
+                task = await self._task_repository.get_by_id(session, task_id)
+                if task is not None:
+                    await self._task_repository.set_status(
+                        session,
+                        task,
+                        status=TaskStatus.FAILED,
+                        remark=remark,
+                    )
+                    await session.commit()
+            except SQLAlchemyError:
+                await session.rollback()
+                return
+
+        self._logger.error(
+            "Extractor task failed.",
+            extra={
+                "service": "core_service",
+                "phase": "extract_failed",
+                "event": "extract_failed",
+                "task_id": task_id,
+                "trace_id": trace_id,
+                "code": code,
+                "reason": reason,
+            },
+        )
