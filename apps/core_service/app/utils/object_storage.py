@@ -7,3 +7,7 @@ def build_source_object_key(task_id: int, file_name: str) -> str:
 
 def build_content_list_object_key(task_id: int) -> str:
     return f"tasks/{task_id}/content_list.json"
+
+
+def build_logical_tables_object_key(task_id: int) -> str:
+    return f"tasks/{task_id}/logical_tables.json"

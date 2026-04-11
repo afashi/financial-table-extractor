@@ -3,6 +3,7 @@ import logging
 from collections.abc import Callable
 from uuid import uuid4
 
+from pydantic import ValidationError
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -16,6 +17,9 @@ from apps.core_service.app.repositories.table_extraction_rule_repository import 
     TableExtractionRuleRepository,
 )
 from apps.core_service.app.repositories.task_repository import TaskRepository
+from apps.core_service.app.schemas.artifact import load_content_list
+from apps.core_service.app.services.logical_table_builder import LogicalTableBuilder
+from apps.core_service.app.utils.object_storage import build_logical_tables_object_key
 from apps.shared.enums.task_status import TaskStatus
 from apps.shared.utils.snowflake import SnowflakeIdGenerator
 
@@ -32,6 +36,7 @@ class ExtractorWorker:
         rule_repository: TableExtractionRuleRepository,
         result_repository: ExtractedResultRepository,
         id_generator: SnowflakeIdGenerator,
+        logical_table_builder: LogicalTableBuilder | None = None,
         trace_id_factory: Callable[[], str] | None = None,
     ) -> None:
         self._session_factory = session_factory
@@ -43,6 +48,7 @@ class ExtractorWorker:
         self._result_repository = result_repository
         self._id_generator = id_generator
         self._trace_id_factory = trace_id_factory or (lambda: uuid4().hex)
+        self._logical_table_builder = logical_table_builder or LogicalTableBuilder()
 
     async def process_next_message(self, *, timeout_seconds: int) -> bool:
         try:
@@ -76,7 +82,6 @@ class ExtractorWorker:
                 bucket=message.bucket,
                 object_key=message.content_list_object_key,
             )
-            json.loads(artifact_bytes.decode("utf-8"))
         except StorageClientError as exc:
             await self._mark_failed(
                 int(message.task_id),
@@ -84,15 +89,21 @@ class ExtractorWorker:
                 trace_id=trace_id,
                 code="OBJECT_STORAGE_UNAVAILABLE",
                 reason=exc.reason,
+                bucket=message.bucket,
+                object_key=message.content_list_object_key,
             )
             return True
-        except json.JSONDecodeError as exc:
+        try:
+            content_blocks = load_content_list(artifact_bytes)
+        except ValidationError as exc:
             await self._mark_failed(
                 int(message.task_id),
-                remark="Parser artifact is not valid JSON.",
+                remark="Parser artifact does not match the canonical content_list contract.",
                 trace_id=trace_id,
                 code="ARTIFACT_INVALID",
-                reason=exc.__class__.__name__,
+                reason=str(exc),
+                bucket=message.bucket,
+                object_key=message.content_list_object_key,
             )
             return True
 
@@ -100,6 +111,86 @@ class ExtractorWorker:
             try:
                 task = await self._task_repository.get_by_id(session, int(message.task_id))
                 if task is None:
+                    self._logger.warning(
+                        "Extractor task referenced a missing task record.",
+                        extra={
+                            "service": "core_service",
+                            "phase": "extract_prepare",
+                            "event": "extract_skipped",
+                            "task_id": message.task_id,
+                            "trace_id": trace_id,
+                            "bucket": message.bucket,
+                            "object_key": message.content_list_object_key,
+                            "code": "TASK_NOT_FOUND",
+                        },
+                    )
+                    return True
+            except SQLAlchemyError as exc:
+                await session.rollback()
+                self._logger.error(
+                    "Failed to load extractor task state.",
+                    extra={
+                        "service": "core_service",
+                        "phase": "extract_prepare",
+                        "event": "extract_failed",
+                        "task_id": message.task_id,
+                        "trace_id": trace_id,
+                        "bucket": message.bucket,
+                        "object_key": message.content_list_object_key,
+                        "code": "DATABASE_UNAVAILABLE",
+                        "reason": exc.__class__.__name__,
+                    },
+                )
+                return True
+
+        logical_tables = self._logical_table_builder.build(content_blocks)
+        logical_tables_object_key = build_logical_tables_object_key(int(message.task_id))
+        logical_tables_payload = json.dumps(
+            [table.model_dump(mode="json") for table in logical_tables],
+            ensure_ascii=True,
+        ).encode("utf-8")
+        try:
+            await self._object_storage_client.upload_bytes(
+                bucket=message.bucket,
+                object_key=logical_tables_object_key,
+                data=logical_tables_payload,
+                content_type="application/json",
+            )
+        except StorageClientError as exc:
+            await self._mark_failed(
+                int(message.task_id),
+                remark="Failed to persist logical tables artifact to object storage.",
+                trace_id=trace_id,
+                code="OBJECT_STORAGE_UNAVAILABLE",
+                reason=exc.reason,
+                bucket=message.bucket,
+                object_key=logical_tables_object_key,
+            )
+            return True
+
+        async with self._session_factory() as session:
+            try:
+                task = await self._task_repository.get_by_id(session, int(message.task_id))
+                if task is None:
+                    await self._cleanup_logical_tables_artifact(
+                        bucket=message.bucket,
+                        object_key=logical_tables_object_key,
+                        task_id=message.task_id,
+                        trace_id=trace_id,
+                    )
+                    self._logger.warning(
+                        "Extractor task disappeared before result persistence.",
+                        extra={
+                            "service": "core_service",
+                            "phase": "extract_complete",
+                            "event": "extract_skipped",
+                            "task_id": message.task_id,
+                            "trace_id": trace_id,
+                            "bucket": message.bucket,
+                            "object_key": logical_tables_object_key,
+                            "code": "TASK_NOT_FOUND",
+                        },
+                    )
                     return True
 
                 rules = await self._rule_repository.list_active_by_doc_type(
@@ -124,6 +215,12 @@ class ExtractorWorker:
                 await session.commit()
             except SQLAlchemyError as exc:
                 await session.rollback()
+                await self._cleanup_logical_tables_artifact(
+                    bucket=message.bucket,
+                    object_key=logical_tables_object_key,
+                    task_id=message.task_id,
+                    trace_id=trace_id,
+                )
                 self._logger.error(
                     "Failed to persist extractor result state.",
                     extra={
@@ -132,6 +229,8 @@ class ExtractorWorker:
                         "event": "extract_failed",
                         "task_id": message.task_id,
                         "trace_id": trace_id,
+                        "bucket": message.bucket,
+                        "object_key": logical_tables_object_key,
                         "code": "DATABASE_UNAVAILABLE",
                         "reason": exc.__class__.__name__,
                     },
@@ -148,6 +247,8 @@ class ExtractorWorker:
                 "trace_id": trace_id,
                 "queue_name": self._queue_client.extractor_queue_name,
                 "object_key": message.content_list_object_key,
+                "logical_tables_object_key": logical_tables_object_key,
+                "logical_table_count": len(logical_tables),
             },
         )
         return True
@@ -160,6 +261,8 @@ class ExtractorWorker:
         trace_id: str,
         code: str,
         reason: str,
+        bucket: str | None = None,
+        object_key: str | None = None,
     ) -> None:
         async with self._session_factory() as session:
             try:
@@ -174,6 +277,20 @@ class ExtractorWorker:
                     await session.commit()
             except SQLAlchemyError:
                 await session.rollback()
+                self._logger.error(
+                    "Failed to persist extractor failure state.",
+                    extra={
+                        "service": "core_service",
+                        "phase": "extract_failed",
+                        "event": "extract_failed",
+                        "task_id": task_id,
+                        "trace_id": trace_id,
+                        "bucket": bucket,
+                        "object_key": object_key,
+                        "code": "DATABASE_UNAVAILABLE",
+                        "reason": "FailedToPersistFailureState",
+                    },
+                )
                 return
 
         self._logger.error(
@@ -184,7 +301,38 @@ class ExtractorWorker:
                 "event": "extract_failed",
                 "task_id": task_id,
                 "trace_id": trace_id,
+                "bucket": bucket,
+                "object_key": object_key,
                 "code": code,
                 "reason": reason,
             },
         )
+
+    async def _cleanup_logical_tables_artifact(
+        self,
+        *,
+        bucket: str,
+        object_key: str,
+        task_id: str,
+        trace_id: str,
+    ) -> None:
+        try:
+            await self._object_storage_client.delete_object(
+                bucket=bucket,
+                object_key=object_key,
+            )
+        except StorageClientError as exc:
+            self._logger.warning(
+                "Failed to clean up logical tables artifact.",
+                extra={
+                    "service": "core_service",
+                    "phase": "extract_cleanup",
+                    "event": "extract_cleanup_failed",
+                    "task_id": task_id,
+                    "trace_id": trace_id,
+                    "bucket": bucket,
+                    "object_key": object_key,
+                    "code": "OBJECT_STORAGE_UNAVAILABLE",
+                    "reason": exc.reason,
+                },
+            )
