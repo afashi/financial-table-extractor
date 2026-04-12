@@ -24,6 +24,11 @@ class Settings(BaseSettings):
     minio_root_password: str = "minioadmin"
     minio_bucket: str = "financial-table-extractor"
     log_level: str = "INFO"
+    llm_fallback_enabled: bool = False
+    llm_fallback_url: str = "http://127.0.0.1:18080/extract"
+    llm_fallback_model: str = "fallback-default"
+    llm_fallback_api_key: str | None = None
+    llm_fallback_timeout_seconds: float = Field(default=30.0, gt=0)
     task_id_node_id: int = Field(default=1, ge=0, le=1023)
     task_id_epoch_ms: int = Field(default=1735689600000, ge=0)
 

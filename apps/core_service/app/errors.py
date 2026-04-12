@@ -36,6 +36,10 @@ class QueueClientError(DependencyBoundaryError):
     pass
 
 
+class LLMFallbackClientError(DependencyBoundaryError):
+    pass
+
+
 class QueuePayloadError(Exception):
     def __init__(self, message: str, *, reason: str | None = None) -> None:
         super().__init__(message)

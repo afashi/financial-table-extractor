@@ -12,11 +12,18 @@ from apps.core_service.app.clients.object_storage import (
     StoredObjectRef,
 )
 from apps.core_service.app.clients.queue import QueueClient
+from apps.core_service.app.clients.llm_fallback import LLMFallbackClient
 from apps.core_service.app.db.models.extracted_result import ExtractedResult
 from apps.core_service.app.db.models.table_extraction_rule import TableExtractionRule
 from apps.core_service.app.db.models.task import Task
-from apps.core_service.app.errors import QueueClientError, QueuePayloadError, StorageClientError
+from apps.core_service.app.errors import (
+    LLMFallbackClientError,
+    QueueClientError,
+    QueuePayloadError,
+    StorageClientError,
+)
 from apps.core_service.app.main import create_app
+from apps.core_service.app.schemas.extraction import ExtractionOutcome
 from apps.core_service.app.schemas.queue import ExtractorTaskMessage, ParserTaskMessage
 from apps.core_service.app.settings import Settings
 
@@ -267,6 +274,56 @@ class FakeExtractedResultRepository:
     def __init__(self) -> None:
         self.rows: list[ExtractedResult] = []
 
+    async def upsert_result(
+        self,
+        session,
+        *,
+        result_id: int,
+        task_id: int,
+        rule: TableExtractionRule,
+        outcome: ExtractionOutcome,
+    ) -> ExtractedResult:
+        del session
+        for row in self.rows:
+            if row.task_id == task_id and row.rule_id == rule.id:
+                row.unit = outcome.unit
+                row.currency = outcome.currency
+                row.extraction_route = outcome.extraction_route
+                row.data_status = outcome.data_status
+                row.table_data = outcome.table_data
+                row.fix_table_data = None
+                row.start_page = outcome.start_page
+                row.end_page = outcome.end_page
+                row.bbox = outcome.bbox
+                row.confidence_score = outcome.confidence_score
+                row.needs_review = outcome.needs_review
+                row.remark = outcome.remark
+                row.update_time = _utc_now()
+                return row
+
+        row = ExtractedResult(
+            id=result_id,
+            task_id=task_id,
+            rule_id=rule.id,
+            target_table_code=rule.target_table_code,
+            unit=outcome.unit,
+            currency=outcome.currency,
+            extraction_route=outcome.extraction_route,
+            data_status=outcome.data_status,
+            table_data=outcome.table_data,
+            fix_table_data=None,
+            start_page=outcome.start_page,
+            end_page=outcome.end_page,
+            bbox=outcome.bbox,
+            confidence_score=outcome.confidence_score,
+            needs_review=outcome.needs_review,
+            remark=outcome.remark,
+            create_time=datetime.now(UTC),
+            update_time=datetime.now(UTC),
+        )
+        self.rows.append(row)
+        return row
+
     async def upsert_placeholder_not_find(
         self,
         session,
@@ -277,34 +334,53 @@ class FakeExtractedResultRepository:
         remark: str,
     ) -> ExtractedResult:
         del session
-        for row in self.rows:
-            if row.task_id == task_id and row.rule_id == rule.id:
-                row.remark = remark
-                row.update_time = _utc_now()
-                return row
-
-        row = ExtractedResult(
-            id=result_id,
+        return await self.upsert_result(
+            session,
+            result_id=result_id,
             task_id=task_id,
-            rule_id=rule.id,
-            target_table_code=rule.target_table_code,
-            unit=None,
-            currency=None,
-            extraction_route=None,
-            data_status="NOT_FIND",
-            table_data=None,
-            fix_table_data=None,
-            start_page=None,
-            end_page=None,
-            bbox=None,
-            confidence_score=Decimal("100.00"),
-            needs_review="0",
-            remark=remark,
-            create_time=datetime.now(UTC),
-            update_time=datetime.now(UTC),
+            rule=rule,
+            outcome=ExtractionOutcome(
+                data_status="NOT_FIND",
+                extraction_route=None,
+                table_data=None,
+                start_page=None,
+                end_page=None,
+                bbox=None,
+                confidence_score=Decimal("100.00"),
+                needs_review="0",
+                remark=remark,
+            ),
         )
-        self.rows.append(row)
-        return row
+
+
+class FakeLLMFallbackClient(LLMFallbackClient):
+    def __init__(self) -> None:
+        self.responses: list[ExtractionOutcome] = []
+        self.raise_error = False
+        self.calls: list[dict[str, object]] = []
+
+    async def extract(self, *, rule, decision) -> ExtractionOutcome:
+        self.calls.append(
+            {
+                "target_table_code": rule.target_table_code,
+                "matched_path": list(decision.matched_path),
+                "context_blocks": list(decision.context_blocks),
+            }
+        )
+        if self.raise_error:
+            raise LLMFallbackClientError(
+                "Failed to call LLM fallback endpoint.",
+                reason="FakeFallbackFailure",
+            )
+        if self.responses:
+            return self.responses.pop(0)
+        return ExtractionOutcome(
+            data_status="NOT_DISCLOSED",
+            extraction_route="SLOW_TRACK",
+            confidence_score=Decimal("88.00"),
+            needs_review="0",
+            remark="Fake fallback defaulted to NOT_DISCLOSED.",
+        )
 
 
 def _utc_now() -> datetime:
@@ -323,6 +399,7 @@ async def test_app() -> AsyncIterator:
     task_repository = FakeTaskRepository()
     rule_repository = FakeTableExtractionRuleRepository()
     result_repository = FakeExtractedResultRepository()
+    llm_fallback_client = FakeLLMFallbackClient()
     settings = Settings(
         database_url="sqlite+aiosqlite:///unused.db",
         task_id_node_id=7,
@@ -339,6 +416,7 @@ async def test_app() -> AsyncIterator:
     app.state.task_repository = task_repository
     app.state.rule_repository = rule_repository
     app.state.result_repository = result_repository
+    app.state.llm_fallback_client = llm_fallback_client
 
     async with app.router.lifespan_context(app):
         yield app
