@@ -13,6 +13,7 @@ from apps.core_service.app.repositories.extracted_result_repository import (
 from apps.core_service.app.repositories.table_extraction_rule_repository import (
     TableExtractionRuleRepository,
 )
+from apps.core_service.app.schemas.extraction import ExtractionOutcome
 
 
 @pytest.fixture
@@ -84,3 +85,50 @@ async def test_rule_listing_and_placeholder_upsert(async_session) -> None:
     assert result.extraction_route is None
     assert result.confidence_score == Decimal("100.00")
     assert result.needs_review == "0"
+
+
+async def test_result_upsert_persists_fast_track_payload(async_session) -> None:
+    active_rule = TableExtractionRule(
+        id=2001,
+        doc_type="ANNUAL_REPORT",
+        target_table_code="main_business_revenue",
+        target_table_name="主营业务收入",
+        path_fingerprints=["管理层讨论与分析", "主营业务分析"],
+        anchor_rule={"logic_match": {"required_headers": ["分部", "收入"]}},
+        semantic_anchor_text="主营业务收入 管理层讨论与分析 主营业务分析",
+        min_match_score=Decimal("0.900"),
+        is_active="1",
+    )
+    async_session.add(active_rule)
+    await async_session.commit()
+
+    result_repo = ExtractedResultRepository()
+    outcome = ExtractionOutcome(
+        data_status="SUCCESS",
+        extraction_route="FAST_TRACK",
+        table_data={"headers": ["分部", "收入"], "rows": [["境内", "100"]]},
+        start_page=3,
+        end_page=3,
+        bbox=[{"page": 3, "x0": 0.0, "y0": 40.0, "x1": 300.0, "y1": 180.0}],
+        confidence_score=Decimal("95.00"),
+        needs_review="0",
+        remark="Rule matched logical table with score 0.950.",
+    )
+
+    result = await result_repo.upsert_result(
+        async_session,
+        result_id=9001,
+        task_id=1001,
+        rule=active_rule,
+        outcome=outcome,
+    )
+    await async_session.commit()
+
+    assert result.data_status == "SUCCESS"
+    assert result.extraction_route == "FAST_TRACK"
+    assert result.table_data == {
+        "headers": ["分部", "收入"],
+        "rows": [["境内", "100"]],
+    }
+    assert result.start_page == 3
+    assert result.end_page == 3
