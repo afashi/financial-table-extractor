@@ -3,6 +3,11 @@ from typing import Literal
 
 from pydantic import BaseModel
 
+from apps.core_service.app.schemas.normalization import (
+    NormalizedCurrency,
+    NormalizedUnit,
+)
+
 
 class ExtractionOutcome(BaseModel):
     data_status: Literal["SUCCESS", "NOT_DISCLOSED", "NOT_FIND"]
@@ -14,5 +19,5 @@ class ExtractionOutcome(BaseModel):
     confidence_score: Decimal
     needs_review: str = "0"
     remark: str | None = None
-    unit: str | None = None
-    currency: str | None = None
+    unit: NormalizedUnit | None = None
+    currency: NormalizedCurrency | None = None

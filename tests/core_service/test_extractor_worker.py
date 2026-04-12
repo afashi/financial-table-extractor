@@ -96,6 +96,50 @@ def build_multi_page_content_list() -> bytes:
     ).encode("utf-8")
 
 
+def build_multi_page_content_list_for_normalized_fast_track() -> bytes:
+    return json.dumps(
+        [
+            {
+                "type": "text",
+                "page_idx": 0,
+                "bbox": [0.0, 0.0, 200.0, 20.0],
+                "text": "主营业务收入",
+            },
+            {
+                "type": "text",
+                "page_idx": 0,
+                "bbox": [0.0, 20.0, 200.0, 40.0],
+                "text": "单位：人民币万元",
+            },
+            {
+                "type": "table",
+                "page_idx": 0,
+                "bbox": [0.0, 40.0, 300.0, 180.0],
+                "table_body": [["分部", "收入"], ["境内", "-"], ["境外", "0"]],
+                "metadata": {
+                    "section_path": ["管理层讨论与分析", "主营业务分析"],
+                },
+            },
+            {
+                "type": "text",
+                "page_idx": 1,
+                "bbox": [0.0, 0.0, 200.0, 20.0],
+                "text": "续表：主营业务收入",
+            },
+            {
+                "type": "table",
+                "page_idx": 1,
+                "bbox": [0.0, 40.0, 300.0, 140.0],
+                "table_body": [["分部", "收入"], ["其他", "20"]],
+                "metadata": {
+                    "section_path": ["管理层讨论与分析", "主营业务分析"],
+                },
+            },
+        ],
+        ensure_ascii=True,
+    ).encode("utf-8")
+
+
 def build_non_standard_section_content_list() -> bytes:
     return json.dumps(
         [
@@ -139,7 +183,9 @@ def build_missing_section_content_list() -> bytes:
     ).encode("utf-8")
 
 
-async def test_extractor_worker_persists_fast_track_results(async_client, test_app) -> None:
+async def test_extractor_worker_persists_normalized_fast_track_results(
+    async_client, test_app
+) -> None:
     response = await async_client.post(
         "/api/v1/extract",
         data={"doc_type": "ANNUAL_REPORT"},
@@ -155,13 +201,17 @@ async def test_extractor_worker_persists_fast_track_results(async_client, test_a
     await test_app.state.object_storage_client.upload_bytes(
         bucket=bucket,
         object_key=content_key,
-        data=build_multi_page_content_list(),
+        data=build_multi_page_content_list_for_normalized_fast_track(),
         content_type="application/json",
     )
     test_app.state.rule_repository.rules = [_rule()]
 
     worker = build_extractor_worker(test_app)
     assert await worker.process_next_message(timeout_seconds=0) is True
+
+    fetch_response = await async_client.get(f"/api/v1/tasks/{task_id}")
+    assert fetch_response.status_code == 200
+    assert fetch_response.json()["status"] == "COMPLETED"
 
     rows = test_app.state.result_repository.rows
     assert len(rows) == 1
@@ -170,14 +220,17 @@ async def test_extractor_worker_persists_fast_track_results(async_client, test_a
     assert rows[0].target_table_code == "main_business_revenue"
     assert rows[0].data_status == "SUCCESS"
     assert rows[0].extraction_route == "FAST_TRACK"
+    assert rows[0].unit == "CNY_TEN_THOUSAND"
+    assert rows[0].currency == "CNY"
     assert rows[0].table_data == {
         "headers": ["分部", "收入"],
-        "rows": [["境内", "100"], ["境外", "80"], ["其他", "20"]],
+        "rows": [["境内", None], ["境外", "0.00"], ["其他", "20"]],
     }
-    assert rows[0].confidence_score == Decimal("95.00")
+    assert rows[0].confidence_score == Decimal("100.00")
+    assert rows[0].needs_review == "0"
 
 
-async def test_extractor_worker_uses_llm_fallback_when_section_matches_without_standard_table(
+async def test_extractor_worker_marks_pending_review_for_low_confidence_slow_track_result(
     async_client, test_app
 ) -> None:
     response = await async_client.post(
@@ -219,14 +272,22 @@ async def test_extractor_worker_uses_llm_fallback_when_section_matches_without_s
     worker = build_extractor_worker(test_app)
     assert await worker.process_next_message(timeout_seconds=0) is True
 
+    fetch_response = await async_client.get(f"/api/v1/tasks/{payload['task_id']}")
+    assert fetch_response.status_code == 200
+    assert fetch_response.json()["status"] == "PENDING_REVIEW"
+
     rows = test_app.state.result_repository.rows
     assert len(rows) == 1
     assert rows[0].data_status == "SUCCESS"
     assert rows[0].extraction_route == "SLOW_TRACK"
+    assert rows[0].unit is None
+    assert rows[0].currency is None
     assert rows[0].table_data == {
         "headers": ["分部", "收入"],
         "rows": [["主营业务", "100"]],
     }
+    assert rows[0].confidence_score == Decimal("75.00")
+    assert rows[0].needs_review == "1"
     assert test_app.state.llm_fallback_client.calls[0]["target_table_code"] == (
         "main_business_revenue"
     )

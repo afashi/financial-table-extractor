@@ -30,8 +30,11 @@ from apps.core_service.app.repositories.task_repository import TaskRepository
 from apps.core_service.app.schemas.artifact import load_content_list
 from apps.core_service.app.schemas.extraction import ExtractionOutcome
 from apps.core_service.app.schemas.routing import RouteDecision
+from apps.core_service.app.services.confidence_scorer import ConfidenceScorer
+from apps.core_service.app.services.extraction_normalizer import ExtractionNormalizer
 from apps.core_service.app.services.fast_track_extractor import FastTrackExtractor
 from apps.core_service.app.services.logical_table_builder import LogicalTableBuilder
+from apps.core_service.app.services.task_status_evaluator import TaskStatusEvaluator
 from apps.core_service.app.services.table_router import TableRouter
 from apps.core_service.app.utils.object_storage import build_logical_tables_object_key
 from apps.shared.enums.task_status import TaskStatus
@@ -54,6 +57,9 @@ class ExtractorWorker:
         table_router: TableRouter | None = None,
         fast_track_extractor: FastTrackExtractor | None = None,
         llm_fallback_client: LLMFallbackClient | None = None,
+        extraction_normalizer: ExtractionNormalizer | None = None,
+        confidence_scorer: ConfidenceScorer | None = None,
+        task_status_evaluator: TaskStatusEvaluator | None = None,
         trace_id_factory: Callable[[], str] | None = None,
     ) -> None:
         self._session_factory = session_factory
@@ -69,6 +75,9 @@ class ExtractorWorker:
         self._table_router = table_router or TableRouter()
         self._fast_track_extractor = fast_track_extractor or FastTrackExtractor()
         self._llm_fallback_client = llm_fallback_client or DisabledLLMFallbackClient()
+        self._extraction_normalizer = extraction_normalizer or ExtractionNormalizer()
+        self._confidence_scorer = confidence_scorer or ConfidenceScorer()
+        self._task_status_evaluator = task_status_evaluator or TaskStatusEvaluator()
 
     async def process_next_message(self, *, timeout_seconds: int) -> bool:
         try:
@@ -217,6 +226,7 @@ class ExtractorWorker:
                     session,
                     doc_type=message.doc_type,
                 )
+                final_outcomes: list[ExtractionOutcome] = []
                 for rule in rules:
                     decision = self._table_router.route(
                         rule=rule,
@@ -224,6 +234,13 @@ class ExtractorWorker:
                         content_blocks=content_blocks,
                     )
                     outcome = await self._build_outcome(rule=rule, decision=decision)
+                    outcome = self._extraction_normalizer.normalize(
+                        outcome=outcome,
+                        decision=decision,
+                        content_blocks=content_blocks,
+                    )
+                    outcome = self._confidence_scorer.apply(outcome=outcome)
+                    final_outcomes.append(outcome)
                     await self._result_repository.upsert_result(
                         session,
                         result_id=self._id_generator.next_id(),
@@ -235,7 +252,7 @@ class ExtractorWorker:
                 await self._task_repository.set_status(
                     session,
                     task,
-                    status=TaskStatus.COMPLETED,
+                    status=self._task_status_evaluator.evaluate(outcomes=final_outcomes),
                     remark=None if rules else "No active extraction rules configured.",
                 )
                 await session.commit()
