@@ -13,5 +13,6 @@ class LogicalTable(BaseModel):
     end_page: int
     header: list[str]
     rows: list[list[str | None]]
+    section_path: list[str] = Field(default_factory=list)
     segments: list[LogicalTableSegment] = Field(default_factory=list)
     context_before: list[str] = Field(default_factory=list)

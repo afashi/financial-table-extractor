@@ -72,6 +72,7 @@ class LogicalTableBuilder:
             end_page=block.page_idx,
             header=header,
             rows=rows,
+            section_path=list(self._section_path(block) or ()),
             segments=[
                 LogicalTableSegment(
                     page_idx=block.page_idx,

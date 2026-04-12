@@ -112,6 +112,23 @@ def test_builder_keeps_distinct_tables_separate_when_section_changes() -> None:
     assert tables[1].rows == [["产品A", "100"]]
 
 
+def test_builder_preserves_section_path_for_routing() -> None:
+    blocks = [
+        _text_block(page_idx=0, text="主营业务收入"),
+        _table_block(
+            page_idx=0,
+            bbox=[0.0, 40.0, 300.0, 180.0],
+            rows=[["分部", "收入"], ["境内", "100"]],
+            section_path=["管理层讨论与分析", "主营业务分析"],
+        ),
+    ]
+
+    tables = LogicalTableBuilder().build(blocks)
+
+    assert len(tables) == 1
+    assert tables[0].section_path == ["管理层讨论与分析", "主营业务分析"]
+
+
 def test_builder_does_not_merge_without_valid_section_path_or_continuation_text() -> None:
     blocks = [
         _table_block(
