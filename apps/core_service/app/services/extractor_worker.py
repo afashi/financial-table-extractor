@@ -1,15 +1,25 @@
 import json
 import logging
 from collections.abc import Callable
+from decimal import Decimal
 from uuid import uuid4
 
 from pydantic import ValidationError
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from apps.core_service.app.clients.llm_fallback import (
+    DisabledLLMFallbackClient,
+    LLMFallbackClient,
+)
 from apps.core_service.app.clients.object_storage import ObjectStorageClient
 from apps.core_service.app.clients.queue import QueueClient
-from apps.core_service.app.errors import QueueClientError, QueuePayloadError, StorageClientError
+from apps.core_service.app.errors import (
+    LLMFallbackClientError,
+    QueueClientError,
+    QueuePayloadError,
+    StorageClientError,
+)
 from apps.core_service.app.repositories.extracted_result_repository import (
     ExtractedResultRepository,
 )
@@ -18,7 +28,11 @@ from apps.core_service.app.repositories.table_extraction_rule_repository import 
 )
 from apps.core_service.app.repositories.task_repository import TaskRepository
 from apps.core_service.app.schemas.artifact import load_content_list
+from apps.core_service.app.schemas.extraction import ExtractionOutcome
+from apps.core_service.app.schemas.routing import RouteDecision
+from apps.core_service.app.services.fast_track_extractor import FastTrackExtractor
 from apps.core_service.app.services.logical_table_builder import LogicalTableBuilder
+from apps.core_service.app.services.table_router import TableRouter
 from apps.core_service.app.utils.object_storage import build_logical_tables_object_key
 from apps.shared.enums.task_status import TaskStatus
 from apps.shared.utils.snowflake import SnowflakeIdGenerator
@@ -37,6 +51,9 @@ class ExtractorWorker:
         result_repository: ExtractedResultRepository,
         id_generator: SnowflakeIdGenerator,
         logical_table_builder: LogicalTableBuilder | None = None,
+        table_router: TableRouter | None = None,
+        fast_track_extractor: FastTrackExtractor | None = None,
+        llm_fallback_client: LLMFallbackClient | None = None,
         trace_id_factory: Callable[[], str] | None = None,
     ) -> None:
         self._session_factory = session_factory
@@ -49,6 +66,9 @@ class ExtractorWorker:
         self._id_generator = id_generator
         self._trace_id_factory = trace_id_factory or (lambda: uuid4().hex)
         self._logical_table_builder = logical_table_builder or LogicalTableBuilder()
+        self._table_router = table_router or TableRouter()
+        self._fast_track_extractor = fast_track_extractor or FastTrackExtractor()
+        self._llm_fallback_client = llm_fallback_client or DisabledLLMFallbackClient()
 
     async def process_next_message(self, *, timeout_seconds: int) -> bool:
         try:
@@ -198,12 +218,18 @@ class ExtractorWorker:
                     doc_type=message.doc_type,
                 )
                 for rule in rules:
-                    await self._result_repository.upsert_placeholder_not_find(
+                    decision = self._table_router.route(
+                        rule=rule,
+                        logical_tables=logical_tables,
+                        content_blocks=content_blocks,
+                    )
+                    outcome = await self._build_outcome(rule=rule, decision=decision)
+                    await self._result_repository.upsert_result(
                         session,
                         result_id=self._id_generator.next_id(),
                         task_id=task.id,
                         rule=rule,
-                        remark="Extraction backbone placeholder result.",
+                        outcome=outcome,
                     )
 
                 await self._task_repository.set_status(
@@ -213,8 +239,19 @@ class ExtractorWorker:
                     remark=None if rules else "No active extraction rules configured.",
                 )
                 await session.commit()
-            except SQLAlchemyError as exc:
+            except (SQLAlchemyError, LLMFallbackClientError) as exc:
                 await session.rollback()
+                if isinstance(exc, LLMFallbackClientError):
+                    await self._mark_failed(
+                        int(message.task_id),
+                        remark="Failed to call LLM fallback endpoint.",
+                        trace_id=trace_id,
+                        code="LLM_FALLBACK_UNAVAILABLE",
+                        reason=exc.reason,
+                        bucket=message.bucket,
+                        object_key=logical_tables_object_key,
+                    )
+                    return True
                 await self._cleanup_logical_tables_artifact(
                     bucket=message.bucket,
                     object_key=logical_tables_object_key,
@@ -252,6 +289,24 @@ class ExtractorWorker:
             },
         )
         return True
+
+    async def _build_outcome(
+        self,
+        *,
+        rule,
+        decision: RouteDecision,
+    ) -> ExtractionOutcome:
+        if decision.decision == "FAST_TRACK":
+            return self._fast_track_extractor.extract(decision=decision)
+        if decision.decision == "SLOW_TRACK":
+            return await self._llm_fallback_client.extract(rule=rule, decision=decision)
+        return ExtractionOutcome(
+            data_status="NOT_FIND",
+            extraction_route=None,
+            confidence_score=Decimal("100.00"),
+            needs_review="0",
+            remark=decision.remark,
+        )
 
     async def _mark_failed(
         self,
