@@ -12,13 +12,14 @@ def normalize_mineru_content_list(raw_blocks: Sequence[dict[str, Any]]) -> list[
 
         item: dict[str, object] = {
             "type": block_type,
-            "page_idx": int(raw.get("page_idx", 0)),
+            "page_idx": _normalize_page_idx(raw.get("page_idx")),
             "bbox": _normalize_bbox(raw.get("bbox")),
             "metadata": _build_metadata(raw),
         }
 
         if block_type == "text":
-            item["text"] = str(raw.get("text", "")).strip()
+            text = raw.get("text", "")
+            item["text"] = text if isinstance(text, str) else str(text)
         else:
             item["table_body"] = _normalize_table_body(raw.get("table_body"))
 
@@ -83,3 +84,10 @@ def _normalize_bbox(value: object) -> list[float]:
         normalized.append(0.0)
 
     return normalized
+
+
+def _normalize_page_idx(value: object) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return 0

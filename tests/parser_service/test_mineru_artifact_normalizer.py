@@ -66,3 +66,24 @@ def test_normalizer_canonicalizes_bbox_to_exactly_four_floats() -> None:
 
     assert blocks[0]["bbox"] == [1.0, 2.5, 3.0, 4.0]
     assert blocks[1]["bbox"] == [9.0, 0.0, 0.0, 0.0]
+
+
+def test_normalizer_tolerates_invalid_page_idx_inputs() -> None:
+    raw_blocks = [
+        {"type": "text", "page_idx": None, "bbox": [0, 0, 1, 1], "text": "a"},
+        {"type": "text", "page_idx": "", "bbox": [0, 0, 1, 1], "text": "b"},
+        {"type": "table", "page_idx": "invalid", "bbox": [0, 0, 1, 1], "table_body": [["h"]]},
+        {"type": "table", "page_idx": "2", "bbox": [0, 0, 1, 1], "table_body": [["h"]]},
+    ]
+
+    blocks = normalize_mineru_content_list(raw_blocks)
+
+    assert [item["page_idx"] for item in blocks] == [0, 0, 0, 2]
+
+
+def test_normalizer_preserves_raw_text_content() -> None:
+    raw_blocks = [{"type": "text", "page_idx": 0, "bbox": [0, 0, 1, 1], "text": "  保留空白  \n"}]
+
+    blocks = normalize_mineru_content_list(raw_blocks)
+
+    assert blocks[0]["text"] == "  保留空白  \n"
