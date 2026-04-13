@@ -11,6 +11,13 @@ class ParserEngineError(Exception):
 
 
 class ParserEngine:
+    def _ensure_pdf_signature(self, source_pdf: bytes) -> None:
+        if not source_pdf.startswith(b"%PDF"):
+            raise ParserEngineError(
+                "Source file does not look like a PDF document.",
+                reason="InvalidPdfSignature",
+            )
+
     async def parse(
         self,
         *,
@@ -33,11 +40,6 @@ class SkeletonParserEngine(ParserEngine):
                 reason="EmptySourcePdf",
             )
 
-        if not source_pdf.startswith(b"%PDF"):
-            raise ParserEngineError(
-                "Source file does not look like a PDF document.",
-                reason="InvalidPdfSignature",
-            )
-
+        self._ensure_pdf_signature(source_pdf)
         content_list = build_placeholder_content_list(message)
         return json.dumps(content_list, ensure_ascii=True).encode("utf-8")
