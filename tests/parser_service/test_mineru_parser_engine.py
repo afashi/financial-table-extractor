@@ -4,8 +4,10 @@ from pathlib import Path
 import pytest
 
 from apps.core_service.app.schemas.queue import ParserTaskMessage
-from apps.parser_service.app.services.parser_engine import ParserEngineError
 from apps.parser_service.app.services.mineru_parser_engine import MinerUParserEngine
+from apps.parser_service.app.services.parser_engine import ParserEngineError, SkeletonParserEngine
+from apps.parser_service.app.services.parser_engine_factory import build_parser_engine
+from apps.parser_service.app.settings import Settings
 
 
 class StubRunner:
@@ -80,3 +82,24 @@ async def test_mineru_parser_engine_maps_tempdir_oserror_to_parser_engine_error(
         )
 
     assert exc_info.value.reason == "NotADirectoryError"
+
+
+def test_build_parser_engine_returns_mineru_engine_when_backend_selected(tmp_path) -> None:
+    settings = Settings(
+        parser_backend="mineru",
+        parser_timeout_seconds=60,
+        parser_temp_dir=str(tmp_path),
+        mineru_backend="pipeline",
+    )
+
+    engine = build_parser_engine(settings)
+
+    assert isinstance(engine, MinerUParserEngine)
+
+
+def test_build_parser_engine_returns_skeleton_for_local_contract_tests() -> None:
+    settings = Settings(parser_backend="skeleton")
+
+    engine = build_parser_engine(settings)
+
+    assert isinstance(engine, SkeletonParserEngine)

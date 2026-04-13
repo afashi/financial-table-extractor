@@ -1,4 +1,5 @@
 from functools import lru_cache
+from typing import Literal
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -24,6 +25,10 @@ class Settings(BaseSettings):
     minio_bucket: str = "financial-table-extractor"
     log_level: str = "INFO"
     parser_poll_timeout_seconds: int = Field(default=5, ge=0, le=300)
+    parser_backend: Literal["skeleton", "mineru"] = "skeleton"
+    parser_timeout_seconds: int = Field(default=180, ge=1, le=3600)
+    parser_temp_dir: str | None = None
+    mineru_backend: Literal["pipeline"] | None = None
 
 
 @lru_cache(maxsize=1)

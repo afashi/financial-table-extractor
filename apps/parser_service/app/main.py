@@ -6,7 +6,7 @@ from apps.core_service.app.clients.object_storage import MinioObjectStorageClien
 from apps.core_service.app.clients.queue import RedisQueueClient
 from apps.core_service.app.errors import QueueClientError
 from apps.core_service.app.logging_config import configure_logging
-from apps.parser_service.app.services.parser_engine import SkeletonParserEngine
+from apps.parser_service.app.services.parser_engine_factory import build_parser_engine
 from apps.parser_service.app.services.parser_worker import ParserWorker
 from apps.parser_service.app.settings import Settings, get_settings
 
@@ -28,11 +28,12 @@ async def run(settings: Settings | None = None) -> None:
         queue_name=app_settings.parser_queue_name,
         extractor_queue_name=app_settings.extractor_queue_name,
     )
+    parser_engine = build_parser_engine(app_settings)
     worker = ParserWorker(
         session_factory=database_client.session_factory,
         object_storage_client=object_storage_client,
         queue_client=queue_client,
-        parser_engine=SkeletonParserEngine(),
+        parser_engine=parser_engine,
         logger=logger,
     )
 

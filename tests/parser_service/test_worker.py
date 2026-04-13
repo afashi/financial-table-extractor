@@ -1,8 +1,10 @@
 import asyncio
 import json
+from pathlib import Path
 
 from apps.core_service.app.utils.object_storage import build_content_list_object_key
 from apps.parser_service.app.services.parser_engine import ParserEngine, SkeletonParserEngine
+from apps.parser_service.app.services.mineru_parser_engine import MinerUParserEngine
 from apps.parser_service.app.services.parser_worker import ParserWorker
 
 
@@ -17,6 +19,27 @@ class BlockingParserEngine(ParserEngine):
         self.started.set()
         await self.release.wait()
         return self._result_bytes
+
+
+class StubRunner:
+    def __init__(self, fixture_path: Path) -> None:
+        self.fixture_path = fixture_path
+        self.calls: list[tuple[str, int, str]] = []
+
+    def __call__(
+        self,
+        *,
+        input_pdf_path: Path,
+        output_dir: Path,
+        timeout_seconds: int,
+        backend: str | None,
+    ) -> None:
+        self.calls.append((input_pdf_path.name, timeout_seconds, backend or "auto"))
+        output_dir.mkdir(parents=True, exist_ok=True)
+        (output_dir / "content_list.json").write_text(
+            self.fixture_path.read_text(encoding="utf-8"),
+            encoding="utf-8",
+        )
 
 
 def build_worker(test_app, parser_engine: ParserEngine) -> ParserWorker:
@@ -120,3 +143,40 @@ async def test_parser_worker_marks_task_failed_on_storage_error(async_client, te
     assert fetch_response.status_code == 200
     assert fetch_response.json()["status"] == "FAILED"
     assert fetch_response.json()["remark"] == "Failed to load source PDF from object storage."
+
+
+async def test_parser_worker_emits_canonical_artifact_from_mineru_engine(
+    async_client,
+    test_app,
+    tmp_path,
+) -> None:
+    response = await async_client.post(
+        "/api/v1/extract",
+        data={"doc_type": "ANNUAL_REPORT"},
+        files={"file": ("handoff.pdf", b"%PDF-1.7\nhandoff", "application/pdf")},
+    )
+    payload = response.json()
+
+    runner = StubRunner(Path("tests/fixtures/mineru/sample_content_list.json"))
+    worker = build_worker(
+        test_app,
+        MinerUParserEngine(
+            temp_dir_root=tmp_path,
+            timeout_seconds=30,
+            backend="pipeline",
+            command_runner=runner,
+        ),
+    )
+
+    assert await worker.process_next_message(timeout_seconds=0) is True
+
+    artifact_key = build_content_list_object_key(int(payload["task_id"]))
+    artifact_upload = next(
+        upload
+        for upload in test_app.state.object_storage_client.uploads
+        if upload.object_key == artifact_key
+    )
+    assert json.loads(artifact_upload.data.decode("utf-8"))[2]["metadata"]["section_path"] == [
+        "管理层讨论与分析",
+        "主营业务分析",
+    ]
