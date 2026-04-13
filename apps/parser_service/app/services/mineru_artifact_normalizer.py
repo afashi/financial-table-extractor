@@ -13,7 +13,7 @@ def normalize_mineru_content_list(raw_blocks: Sequence[dict[str, Any]]) -> list[
         item: dict[str, object] = {
             "type": block_type,
             "page_idx": int(raw.get("page_idx", 0)),
-            "bbox": [float(value) for value in raw.get("bbox", [0.0, 0.0, 0.0, 0.0])],
+            "bbox": _normalize_bbox(raw.get("bbox")),
             "metadata": _build_metadata(raw),
         }
 
@@ -23,7 +23,16 @@ def normalize_mineru_content_list(raw_blocks: Sequence[dict[str, Any]]) -> list[
             item["table_body"] = _normalize_table_body(raw.get("table_body"))
 
         for key, value in raw.items():
-            if key in {"type", "page_idx", "bbox", "text", "table_body", "section_path", "metadata"}:
+            if key in {
+                "type",
+                "page_idx",
+                "bbox",
+                "text",
+                "table_body",
+                "section_path",
+                "metadata",
+                "block_role",
+            }:
                 continue
             item[key] = value
 
@@ -57,3 +66,20 @@ def _normalize_table_body(value: object) -> list[list[str | None]]:
             continue
         rows.append([None if cell is None else str(cell) for cell in row])
     return rows
+
+
+def _normalize_bbox(value: object) -> list[float]:
+    if not isinstance(value, Sequence) or isinstance(value, str | bytes | bytearray):
+        return [0.0, 0.0, 0.0, 0.0]
+
+    normalized: list[float] = []
+    for item in list(value)[:4]:
+        try:
+            normalized.append(float(item))
+        except (TypeError, ValueError):
+            normalized.append(0.0)
+
+    while len(normalized) < 4:
+        normalized.append(0.0)
+
+    return normalized
