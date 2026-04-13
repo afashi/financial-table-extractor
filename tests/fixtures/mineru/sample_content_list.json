@@ -1,0 +1,28 @@
+[
+  {
+    "type": "text",
+    "page_idx": 0,
+    "bbox": [0.0, 0.0, 120.0, 20.0],
+    "text": "管理层讨论与分析",
+    "section_path": ["管理层讨论与分析"],
+    "block_role": "heading",
+    "span_count": 3
+  },
+  {
+    "type": "text",
+    "page_idx": 0,
+    "bbox": [0.0, 24.0, 200.0, 44.0],
+    "text": "主营业务分析",
+    "section_path": ["管理层讨论与分析", "主营业务分析"],
+    "block_role": "heading",
+    "span_count": 2
+  },
+  {
+    "type": "table",
+    "page_idx": 0,
+    "bbox": [0.0, 48.0, 300.0, 180.0],
+    "table_body": [["分部", "营业收入"], ["境内", "100"]],
+    "section_path": ["管理层讨论与分析", "主营业务分析"],
+    "img_path": "tables/page-0-table-0.png"
+  }
+]
