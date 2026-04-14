@@ -5,6 +5,7 @@ from apps.core_service.app.clients.llm_fallback import (
     DisabledLLMFallbackClient,
     HttpLLMFallbackClient,
 )
+from apps.core_service.app.clients.embedding import BGEM3EmbeddingClient
 from apps.core_service.app.clients.database import DatabaseClient
 from apps.core_service.app.clients.object_storage import MinioObjectStorageClient
 from apps.core_service.app.clients.queue import RedisQueueClient
@@ -17,6 +18,7 @@ from apps.core_service.app.repositories.table_extraction_rule_repository import 
 )
 from apps.core_service.app.repositories.task_repository import TaskRepository
 from apps.core_service.app.services.extractor_worker import ExtractorWorker
+from apps.core_service.app.services.table_router import TableRouter
 from apps.core_service.app.settings import Settings, get_settings
 from apps.shared.utils.snowflake import SnowflakeIdGenerator
 
@@ -48,6 +50,12 @@ async def run(settings: Settings | None = None) -> None:
         if app_settings.llm_fallback_enabled
         else DisabledLLMFallbackClient()
     )
+    table_router = TableRouter(
+        embedding_client=BGEM3EmbeddingClient(
+            model_name=app_settings.embedding_model_name,
+            use_fp16=app_settings.embedding_use_fp16,
+        )
+    )
     worker = ExtractorWorker(
         session_factory=database_client.session_factory,
         object_storage_client=object_storage_client,
@@ -60,6 +68,7 @@ async def run(settings: Settings | None = None) -> None:
             worker_id=app_settings.task_id_node_id,
             epoch_ms=app_settings.task_id_epoch_ms,
         ),
+        table_router=table_router,
         llm_fallback_client=llm_fallback_client,
     )
 

@@ -238,7 +238,7 @@ class ExtractorWorker:
                     )
                     return True
 
-                await self._document_toc_repository.replace_for_task(
+                toc_nodes = await self._document_toc_repository.replace_for_task(
                     session,
                     task_id=task.id,
                     drafts=toc_drafts,
@@ -249,8 +249,9 @@ class ExtractorWorker:
                 )
                 final_outcomes: list[ExtractionOutcome] = []
                 for rule in rules:
-                    decision = self._table_router.route(
+                    decision = await self._table_router.route(
                         rule=rule,
+                        toc_nodes=toc_nodes,
                         logical_tables=logical_tables,
                         content_blocks=content_blocks,
                     )

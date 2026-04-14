@@ -20,4 +20,5 @@ class RouteDecision(BaseModel):
     matched_path: list[str] = Field(default_factory=list)
     matched_table: LogicalTable | None = None
     context_blocks: list[str] = Field(default_factory=list)
+    semantic_match_score: Decimal = Decimal("0.000")
     remark: str

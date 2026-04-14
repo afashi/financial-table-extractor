@@ -5,67 +5,88 @@ from apps.core_service.app.db.models.table_extraction_rule import TableExtractio
 from apps.core_service.app.schemas.artifact import ArtifactContentBlock
 from apps.core_service.app.schemas.logical_table import LogicalTable
 from apps.core_service.app.schemas.routing import RouteDecision
+from apps.core_service.app.schemas.toc import TocDraftNode
+
+
+class _ZeroEmbeddingClient:
+    async def encode(self, texts: list[str]) -> list[list[float]]:
+        return [[0.0] for _ in texts]
 
 
 class TableRouter:
-    def route(
+    def __init__(self, *, embedding_client=None) -> None:
+        self._embedding_client = embedding_client or _ZeroEmbeddingClient()
+
+    async def route(
         self,
         *,
         rule: TableExtractionRule,
+        toc_nodes: list[TocDraftNode],
         logical_tables: list[LogicalTable],
         content_blocks: list[ArtifactContentBlock],
     ) -> RouteDecision:
+        if not self._toc_contains_path(rule.path_fingerprints, toc_nodes):
+            return RouteDecision(
+                decision="NOT_FIND",
+                best_score=Decimal("0.000"),
+                matched_path=[],
+                matched_table=None,
+                context_blocks=[],
+                remark="Section fingerprint was not found in the persisted TOC tree.",
+                semantic_match_score=Decimal("0.000"),
+            )
+
         section_tables = [
             table
             for table in logical_tables
             if self._path_matches(rule.path_fingerprints, table.section_path)
         ]
-        if section_tables:
-            scored_tables = [
-                (table, self._candidate_score(rule=rule, table=table))
-                for table in section_tables
-            ]
-            best_table, best_score = max(scored_tables, key=lambda item: item[1])
-            if best_score >= self._threshold(rule):
-                return RouteDecision(
-                    decision="FAST_TRACK",
-                    best_score=best_score,
-                    matched_path=list(best_table.section_path),
-                    matched_table=best_table,
-                    context_blocks=list(best_table.context_before),
-                    remark="Matched logical table by path fingerprint and anchor rules.",
-                )
-            return RouteDecision(
-                decision="SLOW_TRACK",
-                best_score=best_score,
-                matched_path=list(best_table.section_path),
-                matched_table=None,
-                context_blocks=self._section_context(
-                    rule=rule,
-                    content_blocks=content_blocks,
-                    logical_tables=section_tables,
-                ),
-                remark="Matched section fingerprint but no logical table reached the minimum score.",
-            )
-
-        text_only_context = self._text_only_context(rule=rule, content_blocks=content_blocks)
-        if text_only_context:
+        if not section_tables:
             return RouteDecision(
                 decision="SLOW_TRACK",
                 best_score=Decimal("0.000"),
                 matched_path=list(rule.path_fingerprints),
                 matched_table=None,
-                context_blocks=text_only_context,
-                remark="Matched section heading in text blocks but did not find a standard logical table.",
+                context_blocks=self._text_only_context(rule=rule, content_blocks=content_blocks),
+                remark="TOC matched but no standard logical table was found in the section.",
+                semantic_match_score=Decimal("0.000"),
             )
 
+        candidate_texts = [self._candidate_text(table) for table in section_tables]
+        candidate_vectors = await self._embedding_client.encode(candidate_texts)
+        scored_tables: list[tuple[LogicalTable, Decimal, Decimal]] = []
+        for table, vector in zip(section_tables, candidate_vectors, strict=True):
+            deterministic_score = self._candidate_score(rule=rule, table=table)
+            semantic_score = self._cosine_similarity(rule.semantic_vector, vector)
+            total_score = min(
+                deterministic_score + (semantic_score * Decimal("0.350")),
+                Decimal("1.000"),
+            )
+            scored_tables.append((table, total_score, semantic_score))
+
+        best_table, best_score, semantic_score = max(scored_tables, key=lambda item: item[1])
+        if best_score >= self._threshold(rule):
+            return RouteDecision(
+                decision="FAST_TRACK",
+                best_score=best_score,
+                matched_path=list(best_table.section_path),
+                matched_table=best_table,
+                context_blocks=list(best_table.context_before),
+                remark="Matched logical table by TOC, anchor rules, and vector score.",
+                semantic_match_score=semantic_score,
+            )
         return RouteDecision(
-            decision="NOT_FIND",
-            best_score=Decimal("0.000"),
-            matched_path=[],
+            decision="SLOW_TRACK",
+            best_score=best_score,
+            matched_path=list(best_table.section_path),
             matched_table=None,
-            context_blocks=[],
-            remark="Section fingerprint was not found in the parsed artifact.",
+            context_blocks=self._section_context(
+                rule=rule,
+                content_blocks=content_blocks,
+                logical_tables=section_tables,
+            ),
+            remark="Section matched but no logical table cleared the combined threshold.",
+            semantic_match_score=semantic_score,
         )
 
     def _candidate_score(
@@ -97,26 +118,7 @@ class TableRouter:
         if isinstance(title_pattern, str) and re.search(title_pattern, context_text):
             score += Decimal("0.100")
 
-        if rule.semantic_anchor_text:
-            score += self._semantic_overlap_bonus(
-                anchor_text=rule.semantic_anchor_text,
-                context_text=context_text,
-            )
-
         return min(score, Decimal("1.000"))
-
-    def _semantic_overlap_bonus(
-        self,
-        *,
-        anchor_text: str,
-        context_text: str,
-    ) -> Decimal:
-        anchor_tokens = {token for token in anchor_text.split() if token}
-        context_tokens = {token for token in context_text.split() if token}
-        if not anchor_tokens or not context_tokens:
-            return Decimal("0.000")
-        overlap_ratio = len(anchor_tokens & context_tokens) / len(anchor_tokens)
-        return Decimal(str(round(overlap_ratio * 0.050, 3)))
 
     def _threshold(self, rule: TableExtractionRule) -> Decimal:
         return rule.min_match_score or Decimal("0.850")
@@ -129,6 +131,61 @@ class TableRouter:
         return tuple(item.strip() for item in path_fingerprint) == tuple(
             item.strip() for item in section_path
         )
+
+    def _toc_contains_path(
+        self,
+        path_fingerprint: list[str],
+        toc_nodes: list[TocDraftNode],
+    ) -> bool:
+        parent_title: str | None = None
+        parent_id: int | None = None
+        for level, title in enumerate(path_fingerprint, start=1):
+            title = title.strip()
+            if not title:
+                return False
+            node = next(
+                (
+                    item
+                    for item in toc_nodes
+                    if item.level == level
+                    and item.title.strip() == title
+                    and self._parent_matches(
+                        item,
+                        parent_title=parent_title,
+                        parent_id=parent_id,
+                    )
+                ),
+                None,
+            )
+            if node is None:
+                return False
+            parent_title = node.title
+            parent_id = getattr(node, "id", None)
+        return bool(path_fingerprint)
+
+    def _candidate_text(self, table: LogicalTable) -> str:
+        return " ".join([*table.section_path, *table.context_before, *table.header]).strip()
+
+    def _cosine_similarity(
+        self,
+        lhs: list[float] | None,
+        rhs: list[float] | None,
+    ) -> Decimal:
+        if not lhs or not rhs or len(lhs) != len(rhs):
+            return Decimal("0.000")
+        score = sum(left * right for left, right in zip(lhs, rhs, strict=True))
+        return Decimal(f"{score:.3f}")
+
+    def _parent_matches(
+        self,
+        node: TocDraftNode,
+        *,
+        parent_title: str | None,
+        parent_id: int | None,
+    ) -> bool:
+        if hasattr(node, "parent_id"):
+            return getattr(node, "parent_id") == parent_id
+        return getattr(node, "parent_title", None) == parent_title
 
     def _section_context(
         self,

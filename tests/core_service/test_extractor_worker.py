@@ -331,7 +331,7 @@ async def test_extractor_worker_marks_not_find_when_section_is_missing(
     assert len(rows) == 1
     assert rows[0].data_status == "NOT_FIND"
     assert rows[0].extraction_route is None
-    assert rows[0].remark == "Section fingerprint was not found in the parsed artifact."
+    assert rows[0].remark == "Section fingerprint was not found in the persisted TOC tree."
 
 
 async def test_extractor_worker_uploads_logical_tables_artifact(
