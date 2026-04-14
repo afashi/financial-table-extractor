@@ -52,8 +52,10 @@ class TableRouter:
                 semantic_match_score=Decimal("0.000"),
             )
 
-        candidate_texts = [self._candidate_text(table) for table in section_tables]
-        candidate_vectors = await self._embedding_client.encode(candidate_texts)
+        candidate_vectors = self._empty_vectors(count=len(section_tables))
+        if rule.semantic_vector:
+            candidate_texts = [self._candidate_text(table) for table in section_tables]
+            candidate_vectors = await self._embedding_client.encode(candidate_texts)
         scored_tables: list[tuple[LogicalTable, Decimal, Decimal]] = []
         for table, vector in zip(section_tables, candidate_vectors, strict=True):
             deterministic_score = self._candidate_score(rule=rule, table=table)
@@ -228,3 +230,6 @@ class TableRouter:
             and leaf_fingerprint in block.text
             and block.text.strip()
         ]
+
+    def _empty_vectors(self, *, count: int) -> list[list[float]]:
+        return [[0.0] for _ in range(count)]
