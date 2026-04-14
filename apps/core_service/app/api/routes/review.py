@@ -2,16 +2,22 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends
 
-from apps.core_service.app.api.dependencies import get_review_service
+from apps.core_service.app.api.dependencies import get_retrigger_service, get_review_service
 from apps.core_service.app.schemas.review import (
     ExtractedResultRead,
     ResultFixRequest,
     ReviewQueueItem,
 )
+from apps.core_service.app.services.retrigger_service import (
+    RetriggerRequest,
+    RetriggerResponse,
+    RetriggerService,
+)
 from apps.core_service.app.services.review_service import ReviewService
 
 router = APIRouter(tags=["review"])
 ReviewServiceDependency = Annotated[ReviewService, Depends(get_review_service)]
+RetriggerServiceDependency = Annotated[RetriggerService, Depends(get_retrigger_service)]
 
 
 @router.get("/api/v1/review/tasks", response_model=list[ReviewQueueItem])
@@ -41,4 +47,15 @@ async def patch_result_fix(
         result_id=result_id,
         fix_table_data=request.fix_table_data,
         remark=request.remark,
+    )
+
+
+@router.post("/api/v1/extract/retrigger", response_model=RetriggerResponse, status_code=202)
+async def post_retrigger(
+    request: RetriggerRequest,
+    service: RetriggerServiceDependency,
+) -> RetriggerResponse:
+    return await service.retrigger(
+        task_id=int(request.task_id),
+        target_table_codes=request.target_table_codes,
     )

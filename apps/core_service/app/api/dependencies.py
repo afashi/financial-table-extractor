@@ -4,6 +4,7 @@ from typing import Annotated
 from fastapi import Depends, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from apps.core_service.app.services.retrigger_service import RetriggerService
 from apps.core_service.app.services.review_service import ReviewService
 from apps.core_service.app.services.task_service import TaskService
 
@@ -42,4 +43,16 @@ async def get_review_service(
         session=session,
         task_repository=getattr(request.app.state, "task_repository", None),
         result_repository=getattr(request.app.state, "result_repository", None),
+    )
+
+
+async def get_retrigger_service(
+    request: Request,
+    session: SessionDependency,
+) -> RetriggerService:
+    return RetriggerService(
+        session=session,
+        task_repository=getattr(request.app.state, "task_repository", None),
+        queue_client=request.app.state.queue_client,
+        bucket_name=request.app.state.object_storage_client.bucket_name,
     )

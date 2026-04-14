@@ -78,3 +78,30 @@ async def test_patch_result_fix(async_client, test_app) -> None:
     payload = response.json()
     assert payload["needs_review"] == "0"
     assert payload["fix_table_data"]["rows"] == [["境内", "100.00"]]
+
+
+async def test_post_retrigger_enqueues_selected_target_tables(async_client, test_app) -> None:
+    task = Task(
+        id=1001,
+        doc_type="ANNUAL_REPORT",
+        file_name="annual.pdf",
+        file_hash="hash-1",
+        file_size=128,
+        status=TaskStatus.COMPLETED,
+        remark=None,
+    )
+    await test_app.state.task_repository.create(None, task)
+
+    response = await async_client.post(
+        "/api/v1/extract/retrigger",
+        json={
+            "task_id": "1001",
+            "target_table_codes": ["main_business_revenue"],
+        },
+    )
+
+    assert response.status_code == 202
+    assert len(test_app.state.queue_client.reextract_messages) == 1
+    message = test_app.state.queue_client.reextract_messages[0]
+    assert message.task_id == "1001"
+    assert message.target_table_codes == ["main_business_revenue"]
