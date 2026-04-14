@@ -1,6 +1,7 @@
 import json
 from decimal import Decimal
 
+from apps.core_service.app.db.models.task import Task
 from apps.core_service.app.db.models.table_extraction_rule import TableExtractionRule
 from apps.core_service.app.schemas.extraction import ExtractionOutcome
 from apps.core_service.app.schemas.queue import ExtractorTaskMessage
@@ -34,6 +35,7 @@ def build_extractor_worker(test_app) -> ExtractorWorker:
         task_repository=test_app.state.task_repository,
         rule_repository=test_app.state.rule_repository,
         result_repository=test_app.state.result_repository,
+        document_toc_repository=test_app.state.document_toc_repository,
         id_generator=SnowflakeIdGenerator(worker_id=9, epoch_ms=1735689600000),
         llm_fallback_client=test_app.state.llm_fallback_client,
     )
@@ -535,4 +537,83 @@ async def test_extractor_worker_skips_logical_table_upload_for_missing_task(test
         upload.object_key == build_logical_tables_object_key(task_id)
         for upload in test_app.state.object_storage_client.uploads
     )
-    assert test_app.state.result_repository.rows == []
+
+
+async def test_extractor_worker_persists_document_toc_before_routing(test_app) -> None:
+    task = Task(
+        id=1001,
+        doc_type="ANNUAL_REPORT",
+        file_name="annual.pdf",
+        file_hash="hash-1",
+        file_size=128,
+        status="PARSED",
+        remark=None,
+    )
+    await test_app.state.task_repository.create(None, task)
+    await test_app.state.object_storage_client.upload_bytes(
+        object_key="tasks/1001/content_list.json",
+        data=json.dumps(
+            [
+                {
+                    "type": "text",
+                    "page_idx": 0,
+                    "bbox": [0.0, 0.0, 200.0, 20.0],
+                    "text": "管理层讨论与分析",
+                    "metadata": {
+                        "section_path": ["管理层讨论与分析"],
+                        "block_role": "heading",
+                    },
+                },
+                {
+                    "type": "text",
+                    "page_idx": 0,
+                    "bbox": [0.0, 24.0, 200.0, 44.0],
+                    "text": "主营业务分析",
+                    "metadata": {
+                        "section_path": ["管理层讨论与分析", "主营业务分析"],
+                        "block_role": "heading",
+                    },
+                },
+            ],
+            ensure_ascii=True,
+        ).encode("utf-8"),
+        content_type="application/json",
+    )
+    test_app.state.rule_repository.rules = [
+        TableExtractionRule(
+            id=3001,
+            doc_type="ANNUAL_REPORT",
+            target_table_code="main_business_revenue",
+            target_table_name="主营业务分部收入",
+            path_fingerprints=["管理层讨论与分析", "主营业务分析"],
+            anchor_rule=None,
+            semantic_anchor_text=None,
+            min_match_score=None,
+            is_active="1",
+        )
+    ]
+
+    worker = ExtractorWorker(
+        session_factory=test_app.state.database_client.session_factory,
+        object_storage_client=test_app.state.object_storage_client,
+        queue_client=test_app.state.queue_client,
+        logger=test_app.state.logger,
+        task_repository=test_app.state.task_repository,
+        rule_repository=test_app.state.rule_repository,
+        result_repository=test_app.state.result_repository,
+        document_toc_repository=test_app.state.document_toc_repository,
+        id_generator=test_app.state.task_id_generator,
+    )
+
+    assert await worker.process_message(
+        ExtractorTaskMessage(
+            task_id="1001",
+            doc_type="ANNUAL_REPORT",
+            bucket=test_app.state.object_storage_client.bucket_name,
+            content_list_object_key="tasks/1001/content_list.json",
+        )
+    ) is True
+
+    toc_rows = test_app.state.document_toc_repository.rows_by_task[1001]
+    assert [row.title for row in toc_rows] == ["管理层讨论与分析", "主营业务分析"]
+    assert toc_rows[1].parent_id == toc_rows[0].id

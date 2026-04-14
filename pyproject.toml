@@ -8,6 +8,7 @@ dependencies = [
     "asyncpg>=0.30.0,<1",
     "fastapi>=0.116.1,<1",
     "minio>=7.2.18,<8",
+    "pgvector>=0.3.6,<1",
     "pydantic-settings>=2.11.0,<3",
     "python-multipart>=0.0.20,<1",
     "redis>=6.4.0,<7",

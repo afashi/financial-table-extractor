@@ -1,6 +1,7 @@
 from datetime import UTC, datetime
 from decimal import Decimal
 
+from pgvector.sqlalchemy import Vector
 from sqlalchemy import BigInteger, DateTime, Index, Numeric, String
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
@@ -25,6 +26,7 @@ class TableExtractionRule(Base):
     path_fingerprints: Mapped[list[str]] = mapped_column(JSONB, nullable=False)
     anchor_rule: Mapped[dict[str, object] | None] = mapped_column(JSONB, nullable=True)
     semantic_anchor_text: Mapped[str | None] = mapped_column(String(2000), nullable=True)
+    semantic_vector: Mapped[list[float] | None] = mapped_column(Vector(1024), nullable=True)
     min_match_score: Mapped[Decimal | None] = mapped_column(Numeric(4, 3), nullable=True)
     is_active: Mapped[str] = mapped_column(String(1), nullable=False, default="1")
     create_time: Mapped[datetime] = mapped_column(

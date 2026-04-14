@@ -23,14 +23,19 @@ from apps.core_service.app.errors import (
 from apps.core_service.app.repositories.extracted_result_repository import (
     ExtractedResultRepository,
 )
+from apps.core_service.app.repositories.document_toc_repository import (
+    DocumentTocRepository,
+)
 from apps.core_service.app.repositories.table_extraction_rule_repository import (
     TableExtractionRuleRepository,
 )
 from apps.core_service.app.repositories.task_repository import TaskRepository
 from apps.core_service.app.schemas.artifact import load_content_list
 from apps.core_service.app.schemas.extraction import ExtractionOutcome
+from apps.core_service.app.schemas.queue import ExtractorTaskMessage
 from apps.core_service.app.schemas.routing import RouteDecision
 from apps.core_service.app.services.confidence_scorer import ConfidenceScorer
+from apps.core_service.app.services.document_toc_builder import DocumentTocBuilder
 from apps.core_service.app.services.extraction_normalizer import ExtractionNormalizer
 from apps.core_service.app.services.fast_track_extractor import FastTrackExtractor
 from apps.core_service.app.services.logical_table_builder import LogicalTableBuilder
@@ -53,6 +58,8 @@ class ExtractorWorker:
         rule_repository: TableExtractionRuleRepository,
         result_repository: ExtractedResultRepository,
         id_generator: SnowflakeIdGenerator,
+        document_toc_repository: DocumentTocRepository | None = None,
+        document_toc_builder: DocumentTocBuilder | None = None,
         logical_table_builder: LogicalTableBuilder | None = None,
         table_router: TableRouter | None = None,
         fast_track_extractor: FastTrackExtractor | None = None,
@@ -71,6 +78,8 @@ class ExtractorWorker:
         self._result_repository = result_repository
         self._id_generator = id_generator
         self._trace_id_factory = trace_id_factory or (lambda: uuid4().hex)
+        self._document_toc_repository = document_toc_repository or DocumentTocRepository()
+        self._document_toc_builder = document_toc_builder or DocumentTocBuilder()
         self._logical_table_builder = logical_table_builder or LogicalTableBuilder()
         self._table_router = table_router or TableRouter()
         self._fast_track_extractor = fast_track_extractor or FastTrackExtractor()
@@ -105,6 +114,9 @@ class ExtractorWorker:
         if message is None:
             return False
 
+        return await self.process_message(message)
+
+    async def process_message(self, message: ExtractorTaskMessage) -> bool:
         trace_id = self._trace_id_factory()
         try:
             artifact_bytes = await self._object_storage_client.download_bytes(
@@ -172,6 +184,10 @@ class ExtractorWorker:
                 )
                 return True
 
+        toc_drafts = self._document_toc_builder.build(
+            task_id=int(message.task_id),
+            blocks=content_blocks,
+        )
         logical_tables = self._logical_table_builder.build(content_blocks)
         logical_tables_object_key = build_logical_tables_object_key(int(message.task_id))
         logical_tables_payload = json.dumps(
@@ -222,6 +238,11 @@ class ExtractorWorker:
                     )
                     return True
 
+                await self._document_toc_repository.replace_for_task(
+                    session,
+                    task_id=task.id,
+                    drafts=toc_drafts,
+                )
                 rules = await self._rule_repository.list_active_by_doc_type(
                     session,
                     doc_type=message.doc_type,

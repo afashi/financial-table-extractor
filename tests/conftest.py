@@ -13,6 +13,7 @@ from apps.core_service.app.clients.object_storage import (
 )
 from apps.core_service.app.clients.queue import QueueClient
 from apps.core_service.app.clients.llm_fallback import LLMFallbackClient
+from apps.core_service.app.db.models.document_toc import DocumentToc
 from apps.core_service.app.db.models.extracted_result import ExtractedResult
 from apps.core_service.app.db.models.table_extraction_rule import TableExtractionRule
 from apps.core_service.app.db.models.task import Task
@@ -353,6 +354,36 @@ class FakeExtractedResultRepository:
         )
 
 
+class FakeDocumentTocRepository:
+    def __init__(self) -> None:
+        self.rows_by_task: dict[int, list[DocumentToc]] = {}
+        self._next_id = 9000
+
+    async def replace_for_task(self, session, *, task_id: int, drafts) -> list[DocumentToc]:
+        del session
+        rows: list[DocumentToc] = []
+        latest_ids_by_level: dict[int, int] = {}
+        for draft in drafts:
+            self._next_id += 1
+            row = DocumentToc(
+                id=self._next_id,
+                task_id=task_id,
+                level=draft.level,
+                title=draft.title,
+                start_page=draft.start_page,
+                end_page=draft.end_page,
+                start_y=draft.start_y,
+                end_y=draft.end_y,
+                parent_id=latest_ids_by_level.get(draft.level - 1),
+                create_time=_utc_now(),
+                update_time=_utc_now(),
+            )
+            rows.append(row)
+            latest_ids_by_level[draft.level] = row.id
+        self.rows_by_task[task_id] = rows
+        return rows
+
+
 class FakeLLMFallbackClient(LLMFallbackClient):
     def __init__(self) -> None:
         self.responses: list[ExtractionOutcome] = []
@@ -399,6 +430,7 @@ async def test_app() -> AsyncIterator:
     task_repository = FakeTaskRepository()
     rule_repository = FakeTableExtractionRuleRepository()
     result_repository = FakeExtractedResultRepository()
+    document_toc_repository = FakeDocumentTocRepository()
     llm_fallback_client = FakeLLMFallbackClient()
     settings = Settings(
         database_url="sqlite+aiosqlite:///unused.db",
@@ -416,6 +448,7 @@ async def test_app() -> AsyncIterator:
     app.state.task_repository = task_repository
     app.state.rule_repository = rule_repository
     app.state.result_repository = result_repository
+    app.state.document_toc_repository = document_toc_repository
     app.state.llm_fallback_client = llm_fallback_client
 
     async with app.router.lifespan_context(app):
