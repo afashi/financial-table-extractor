@@ -21,3 +21,25 @@ class TableExtractionRuleRepository:
         )
         result = await session.execute(statement)
         return list(result.scalars().all())
+
+    async def list_rules_missing_vectors(
+        self,
+        session: AsyncSession,
+    ) -> list[TableExtractionRule]:
+        statement = (
+            select(TableExtractionRule)
+            .where(TableExtractionRule.semantic_vector.is_(None))
+            .order_by(TableExtractionRule.id.asc())
+        )
+        result = await session.execute(statement)
+        return list(result.scalars().all())
+
+    async def update_semantic_vectors(
+        self,
+        session: AsyncSession,
+        *,
+        pairs: list[tuple[TableExtractionRule, list[float]]],
+    ) -> None:
+        for rule, vector in pairs:
+            rule.semantic_vector = vector
+        await session.flush()

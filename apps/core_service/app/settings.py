@@ -29,6 +29,8 @@ class Settings(BaseSettings):
     llm_fallback_model: str = "fallback-default"
     llm_fallback_api_key: str | None = None
     llm_fallback_timeout_seconds: float = Field(default=30.0, gt=0)
+    embedding_model_name: str = "BAAI/bge-m3"
+    embedding_use_fp16: bool = True
     task_id_node_id: int = Field(default=1, ge=0, le=1023)
     task_id_epoch_ms: int = Field(default=1735689600000, ge=0)
 
