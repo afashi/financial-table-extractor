@@ -4,6 +4,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from apps.core_service.app.db.models.task import Task
+from apps.shared.enums.task_status import TaskStatus
 
 
 class TaskRepository:
@@ -52,3 +53,12 @@ class TaskRepository:
         await session.flush()
         await session.refresh(task)
         return task
+
+    async def list_pending_review_tasks(self, session: AsyncSession) -> list[Task]:
+        statement = (
+            select(Task)
+            .where(Task.status == TaskStatus.PENDING_REVIEW)
+            .order_by(Task.update_time.desc(), Task.id.asc())
+        )
+        result = await session.execute(statement)
+        return list(result.scalars().all())

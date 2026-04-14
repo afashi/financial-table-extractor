@@ -256,6 +256,18 @@ class FakeTaskRepository:
         task.update_time = _utc_now()
         return task
 
+    async def list_pending_review_tasks(self, session) -> list[Task]:
+        del session
+        return sorted(
+            [
+                task
+                for task in self._tasks_by_id.values()
+                if _enum_value(task.status) == "PENDING_REVIEW"
+            ],
+            key=lambda task: (task.update_time, task.id),
+            reverse=True,
+        )
+
 
 class FakeTableExtractionRuleRepository:
     def __init__(self) -> None:
@@ -352,6 +364,18 @@ class FakeExtractedResultRepository:
                 remark=remark,
             ),
         )
+
+    async def list_pending_review_rows(self, session, *, task_id: int) -> list[ExtractedResult]:
+        del session
+        return [
+            row
+            for row in self.rows
+            if row.task_id == task_id and row.needs_review == "1"
+        ]
+
+    async def list_by_task(self, session, *, task_id: int) -> list[ExtractedResult]:
+        del session
+        return [row for row in self.rows if row.task_id == task_id]
 
 
 class FakeDocumentTocRepository:

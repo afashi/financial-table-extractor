@@ -79,3 +79,34 @@ class ExtractedResultRepository:
                 remark=remark,
             ),
         )
+
+    async def list_pending_review_rows(
+        self,
+        session: AsyncSession,
+        *,
+        task_id: int,
+    ) -> list[ExtractedResult]:
+        statement = (
+            select(ExtractedResult)
+            .where(
+                ExtractedResult.task_id == task_id,
+                ExtractedResult.needs_review == "1",
+            )
+            .order_by(ExtractedResult.id.asc())
+        )
+        result = await session.execute(statement)
+        return list(result.scalars().all())
+
+    async def list_by_task(
+        self,
+        session: AsyncSession,
+        *,
+        task_id: int,
+    ) -> list[ExtractedResult]:
+        statement = (
+            select(ExtractedResult)
+            .where(ExtractedResult.task_id == task_id)
+            .order_by(ExtractedResult.id.asc())
+        )
+        result = await session.execute(statement)
+        return list(result.scalars().all())
