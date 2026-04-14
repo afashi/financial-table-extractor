@@ -1,7 +1,7 @@
 from datetime import UTC, datetime
 from decimal import Decimal
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from apps.core_service.app.db.models.extracted_result import ExtractedResult
@@ -110,3 +110,37 @@ class ExtractedResultRepository:
         )
         result = await session.execute(statement)
         return list(result.scalars().all())
+
+    async def apply_fix(
+        self,
+        session: AsyncSession,
+        *,
+        task_id: int,
+        result_id: int,
+        fix_table_data: dict[str, object],
+        remark: str | None,
+    ) -> ExtractedResult:
+        statement = select(ExtractedResult).where(
+            ExtractedResult.task_id == task_id,
+            ExtractedResult.id == result_id,
+        )
+        row = (await session.execute(statement)).scalar_one()
+        row.fix_table_data = fix_table_data
+        row.needs_review = "0"
+        row.remark = remark
+        row.update_time = datetime.now(UTC)
+        await session.flush()
+        await session.refresh(row)
+        return row
+
+    async def count_pending_review_by_task(
+        self,
+        session: AsyncSession,
+        *,
+        task_id: int,
+    ) -> int:
+        statement = select(func.count()).select_from(ExtractedResult).where(
+            ExtractedResult.task_id == task_id,
+            ExtractedResult.needs_review == "1",
+        )
+        return int((await session.execute(statement)).scalar_one())

@@ -3,7 +3,11 @@ from typing import Annotated
 from fastapi import APIRouter, Depends
 
 from apps.core_service.app.api.dependencies import get_review_service
-from apps.core_service.app.schemas.review import ExtractedResultRead, ReviewQueueItem
+from apps.core_service.app.schemas.review import (
+    ExtractedResultRead,
+    ResultFixRequest,
+    ReviewQueueItem,
+)
 from apps.core_service.app.services.review_service import ReviewService
 
 router = APIRouter(tags=["review"])
@@ -23,3 +27,18 @@ async def get_task_results(
     service: ReviewServiceDependency,
 ) -> list[ExtractedResultRead]:
     return await service.get_task_results(task_id=task_id)
+
+
+@router.patch("/api/v1/tasks/{task_id}/results/{result_id}", response_model=ExtractedResultRead)
+async def patch_result_fix(
+    task_id: int,
+    result_id: int,
+    request: ResultFixRequest,
+    service: ReviewServiceDependency,
+) -> ExtractedResultRead:
+    return await service.apply_fix(
+        task_id=task_id,
+        result_id=result_id,
+        fix_table_data=request.fix_table_data,
+        remark=request.remark,
+    )

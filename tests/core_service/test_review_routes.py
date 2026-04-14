@@ -58,3 +58,23 @@ async def test_get_task_results(async_client, test_app) -> None:
     payload = response.json()
     assert payload[0]["result_id"] == "2001"
     assert payload[0]["target_table_code"] == "main_business_revenue"
+
+
+async def test_patch_result_fix(async_client, test_app) -> None:
+    await _seed_review_state(test_app)
+
+    response = await async_client.patch(
+        "/api/v1/tasks/1001/results/2001",
+        json={
+            "fix_table_data": {
+                "headers": ["分部", "收入"],
+                "rows": [["境内", "100.00"]],
+            },
+            "remark": "人工复核确认收入口径。",
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["needs_review"] == "0"
+    assert payload["fix_table_data"]["rows"] == [["境内", "100.00"]]

@@ -377,6 +377,33 @@ class FakeExtractedResultRepository:
         del session
         return [row for row in self.rows if row.task_id == task_id]
 
+    async def apply_fix(
+        self,
+        session,
+        *,
+        task_id: int,
+        result_id: int,
+        fix_table_data: dict[str, object],
+        remark: str | None,
+    ) -> ExtractedResult:
+        del session
+        for row in self.rows:
+            if row.task_id == task_id and row.id == result_id:
+                row.fix_table_data = fix_table_data
+                row.needs_review = "0"
+                row.remark = remark
+                row.update_time = _utc_now()
+                return row
+        raise LookupError(f"Result {result_id} for task {task_id} was not found.")
+
+    async def count_pending_review_by_task(self, session, *, task_id: int) -> int:
+        del session
+        return sum(
+            1
+            for row in self.rows
+            if row.task_id == task_id and row.needs_review == "1"
+        )
+
 
 class FakeDocumentTocRepository:
     def __init__(self) -> None:

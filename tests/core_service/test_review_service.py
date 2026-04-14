@@ -68,3 +68,27 @@ async def test_review_service_returns_task_results(test_app) -> None:
     assert results[0].result_id == "2001"
     assert results[0].needs_review == "1"
     assert results[0].fix_table_data is None
+
+
+async def test_review_service_applies_fix_and_clears_task_review_flag(test_app) -> None:
+    await _seed_review_state(test_app)
+    service = ReviewService(
+        session=test_app.state.database_client.session_factory(),
+        task_repository=test_app.state.task_repository,
+        result_repository=test_app.state.result_repository,
+    )
+
+    updated = await service.apply_fix(
+        task_id=1001,
+        result_id=2001,
+        fix_table_data={"headers": ["分部", "收入"], "rows": [["境内", "100.00"]]},
+        remark="人工复核确认收入口径。",
+    )
+
+    assert updated.fix_table_data == {
+        "headers": ["分部", "收入"],
+        "rows": [["境内", "100.00"]],
+    }
+    assert updated.needs_review == "0"
+    task = await test_app.state.task_repository.get_by_id(None, 1001)
+    assert task.status == TaskStatus.COMPLETED
