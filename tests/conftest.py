@@ -103,11 +103,14 @@ class FakeQueueClient(QueueClient):
         *,
         queue_name: str = "parser_queue",
         extractor_queue_name: str = "extractor_queue",
+        reextract_queue_name: str = "reextract_queue",
     ) -> None:
         self.queue_name = queue_name
         self.extractor_queue_name = extractor_queue_name
+        self.reextract_queue_name = reextract_queue_name
         self.messages: list[ParserTaskMessage] = []
         self.extractor_messages: list[ExtractorTaskMessage] = []
+        self.reextract_messages: list[ExtractorTaskMessage] = []
         self.invalid_payloads: list[str] = []
         self.publish_failures_remaining = 0
         self.consume_failures_remaining = 0
@@ -168,6 +171,30 @@ class FakeQueueClient(QueueClient):
             return None
 
         return self.extractor_messages.pop(0)
+
+    async def publish_reextract_task(self, message: ExtractorTaskMessage) -> None:
+        if self.publish_failures_remaining > 0:
+            self.publish_failures_remaining -= 1
+            raise QueueClientError(
+                f"Failed to publish queue message to '{self.reextract_queue_name}'.",
+                reason="FakePublishFailure",
+            )
+
+        self.reextract_messages.append(message)
+
+    async def consume_reextract_task(self, *, timeout_seconds: int) -> ExtractorTaskMessage | None:
+        del timeout_seconds
+        if self.consume_failures_remaining > 0:
+            self.consume_failures_remaining -= 1
+            raise QueueClientError(
+                f"Failed to consume queue message from '{self.reextract_queue_name}'.",
+                reason="FakeConsumeFailure",
+            )
+
+        if not self.reextract_messages:
+            return None
+
+        return self.reextract_messages.pop(0)
 
 
 class FakeAsyncSession:
@@ -489,6 +516,7 @@ async def test_app() -> AsyncIterator:
         minio_bucket=object_storage_client.bucket_name,
         parser_queue_name=queue_client.queue_name,
         extractor_queue_name=queue_client.extractor_queue_name,
+        reextract_queue_name=queue_client.reextract_queue_name,
     )
     app = create_app(
         settings,

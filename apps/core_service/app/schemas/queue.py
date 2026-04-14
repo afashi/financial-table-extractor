@@ -18,3 +18,4 @@ class ExtractorTaskMessage(BaseModel):
     doc_type: DocumentType
     bucket: str
     content_list_object_key: str
+    target_table_codes: list[str] | None = None

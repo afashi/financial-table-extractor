@@ -116,8 +116,37 @@ class ExtractorWorker:
 
         return await self.process_message(message)
 
+    async def process_next_reextract_message(self, *, timeout_seconds: int) -> bool:
+        try:
+            message = await self._queue_client.consume_reextract_task(
+                timeout_seconds=timeout_seconds
+            )
+        except QueuePayloadError as exc:
+            self._logger.error(
+                "Discarded invalid reextract queue payload.",
+                extra={
+                    "service": "core_service",
+                    "phase": "reextract_queue_consume",
+                    "event": "extract_failed",
+                    "task_id": None,
+                    "trace_id": self._trace_id_factory(),
+                    "queue_name": self._queue_client.reextract_queue_name,
+                    "code": "QUEUE_PAYLOAD_INVALID",
+                    "reason": exc.reason,
+                },
+            )
+            return True
+        except QueueClientError:
+            raise
+
+        if message is None:
+            return False
+
+        return await self.process_message(message)
+
     async def process_message(self, message: ExtractorTaskMessage) -> bool:
         trace_id = self._trace_id_factory()
+        selected_codes = set(message.target_table_codes or [])
         try:
             artifact_bytes = await self._object_storage_client.download_bytes(
                 bucket=message.bucket,
@@ -247,8 +276,13 @@ class ExtractorWorker:
                     session,
                     doc_type=message.doc_type,
                 )
+                selected_rules = [
+                    rule
+                    for rule in rules
+                    if not selected_codes or rule.target_table_code in selected_codes
+                ]
                 final_outcomes: list[ExtractionOutcome] = []
-                for rule in rules:
+                for rule in selected_rules:
                     decision = await self._table_router.route(
                         rule=rule,
                         toc_nodes=toc_nodes,
@@ -271,11 +305,20 @@ class ExtractorWorker:
                         outcome=outcome,
                     )
 
+                status = self._task_status_evaluator.evaluate(outcomes=final_outcomes)
+                if selected_codes:
+                    pending_count = await self._result_repository.count_pending_review_by_task(
+                        session,
+                        task_id=task.id,
+                    )
+                    status = (
+                        TaskStatus.PENDING_REVIEW if pending_count else TaskStatus.COMPLETED
+                    )
                 await self._task_repository.set_status(
                     session,
                     task,
-                    status=self._task_status_evaluator.evaluate(outcomes=final_outcomes),
-                    remark=None if rules else "No active extraction rules configured.",
+                    status=status,
+                    remark=None if selected_rules else "No active extraction rules configured.",
                 )
                 await session.commit()
             except (SQLAlchemyError, LLMFallbackClientError) as exc:
@@ -321,7 +364,11 @@ class ExtractorWorker:
                 "event": "extract_completed",
                 "task_id": message.task_id,
                 "trace_id": trace_id,
-                "queue_name": self._queue_client.extractor_queue_name,
+                "queue_name": (
+                    self._queue_client.reextract_queue_name
+                    if message.target_table_codes
+                    else self._queue_client.extractor_queue_name
+                ),
                 "object_key": message.content_list_object_key,
                 "logical_tables_object_key": logical_tables_object_key,
                 "logical_table_count": len(logical_tables),

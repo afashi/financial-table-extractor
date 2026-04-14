@@ -41,12 +41,18 @@ def build_extractor_worker(test_app) -> ExtractorWorker:
     )
 
 
-def _rule(*, min_match_score: str = "0.850") -> TableExtractionRule:
+def _rule(
+    *,
+    rule_id: int = 3001,
+    target_table_code: str = "main_business_revenue",
+    target_table_name: str = "主营业务收入",
+    min_match_score: str = "0.850",
+) -> TableExtractionRule:
     return TableExtractionRule(
-        id=3001,
+        id=rule_id,
         doc_type="ANNUAL_REPORT",
-        target_table_code="main_business_revenue",
-        target_table_name="主营业务收入",
+        target_table_code=target_table_code,
+        target_table_name=target_table_name,
         path_fingerprints=["管理层讨论与分析", "主营业务分析"],
         anchor_rule={
             "logic_match": {
@@ -617,3 +623,44 @@ async def test_extractor_worker_persists_document_toc_before_routing(test_app) -
     toc_rows = test_app.state.document_toc_repository.rows_by_task[1001]
     assert [row.title for row in toc_rows] == ["管理层讨论与分析", "主营业务分析"]
     assert toc_rows[1].parent_id == toc_rows[0].id
+
+
+async def test_extractor_worker_reextracts_only_selected_target_tables(test_app) -> None:
+    task = Task(
+        id=1001,
+        doc_type="ANNUAL_REPORT",
+        file_name="annual.pdf",
+        file_hash="hash-1",
+        file_size=128,
+        status="PARSED",
+        remark=None,
+    )
+    await test_app.state.task_repository.create(None, task)
+    await test_app.state.object_storage_client.upload_bytes(
+        object_key="tasks/1001/content_list.json",
+        data=build_multi_page_content_list(),
+        content_type="application/json",
+    )
+    test_app.state.rule_repository.rules = [
+        _rule(),
+        _rule(
+            rule_id=3002,
+            target_table_code="other_business_cost",
+            target_table_name="其他业务成本",
+        ),
+    ]
+
+    message = ExtractorTaskMessage(
+        task_id="1001",
+        doc_type="ANNUAL_REPORT",
+        bucket=test_app.state.object_storage_client.bucket_name,
+        content_list_object_key="tasks/1001/content_list.json",
+        target_table_codes=["main_business_revenue"],
+    )
+    test_app.state.queue_client.reextract_messages.append(message)
+
+    worker = build_extractor_worker(test_app)
+    assert await worker.process_next_reextract_message(timeout_seconds=0) is True
+
+    rows = [row for row in test_app.state.result_repository.rows if row.task_id == 1001]
+    assert [row.target_table_code for row in rows] == ["main_business_revenue"]

@@ -19,6 +19,7 @@ class Settings(BaseSettings):
     redis_url: str = "redis://localhost:26379/0"
     parser_queue_name: str = "parser_queue"
     extractor_queue_name: str = "extractor_queue"
+    reextract_queue_name: str = "reextract_queue"
     minio_endpoint: str = "http://localhost:29000"
     minio_root_user: str = "minioadmin"
     minio_root_password: str = "minioadmin"

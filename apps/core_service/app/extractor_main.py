@@ -39,6 +39,7 @@ async def run(settings: Settings | None = None) -> None:
         redis_url=app_settings.redis_url,
         queue_name=app_settings.parser_queue_name,
         extractor_queue_name=app_settings.extractor_queue_name,
+        reextract_queue_name=app_settings.reextract_queue_name,
     )
     llm_fallback_client = (
         HttpLLMFallbackClient(
@@ -78,6 +79,8 @@ async def run(settings: Settings | None = None) -> None:
 
     try:
         while True:
+            if await worker.process_next_reextract_message(timeout_seconds=0):
+                continue
             await worker.process_next_message(timeout_seconds=5)
     finally:
         await llm_fallback_client.dispose()

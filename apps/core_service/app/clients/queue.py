@@ -15,6 +15,7 @@ QueueMessageT = TypeVar("QueueMessageT", ParserTaskMessage, ExtractorTaskMessage
 class QueueClient:
     queue_name: str
     extractor_queue_name: str | None = None
+    reextract_queue_name: str | None = None
 
     async def healthcheck(self) -> None:
         return None
@@ -35,6 +36,16 @@ class QueueClient:
     ) -> ExtractorTaskMessage | None:
         raise NotImplementedError
 
+    async def publish_reextract_task(self, message: ExtractorTaskMessage) -> None:
+        raise NotImplementedError
+
+    async def consume_reextract_task(
+        self,
+        *,
+        timeout_seconds: int,
+    ) -> ExtractorTaskMessage | None:
+        raise NotImplementedError
+
     async def dispose(self) -> None:
         return None
 
@@ -46,9 +57,11 @@ class RedisQueueClient(QueueClient):
         redis_url: str,
         queue_name: str,
         extractor_queue_name: str | None = None,
+        reextract_queue_name: str | None = None,
     ) -> None:
         self.queue_name = queue_name
         self.extractor_queue_name = extractor_queue_name
+        self.reextract_queue_name = reextract_queue_name
         self._redis = Redis.from_url(redis_url, encoding="utf-8", decode_responses=True)
 
     async def healthcheck(self) -> None:
@@ -80,6 +93,20 @@ class RedisQueueClient(QueueClient):
     ) -> ExtractorTaskMessage | None:
         return await self._pop(
             queue_name=self._get_extractor_queue_name(),
+            timeout_seconds=timeout_seconds,
+            message_type=ExtractorTaskMessage,
+        )
+
+    async def publish_reextract_task(self, message: ExtractorTaskMessage) -> None:
+        await self._push(queue_name=self._get_reextract_queue_name(), message=message)
+
+    async def consume_reextract_task(
+        self,
+        *,
+        timeout_seconds: int,
+    ) -> ExtractorTaskMessage | None:
+        return await self._pop(
+            queue_name=self._get_reextract_queue_name(),
             timeout_seconds=timeout_seconds,
             message_type=ExtractorTaskMessage,
         )
@@ -133,6 +160,14 @@ class RedisQueueClient(QueueClient):
                 reason="ExtractorQueueNameMissing",
             )
         return self.extractor_queue_name
+
+    def _get_reextract_queue_name(self) -> str:
+        if self.reextract_queue_name is None:
+            raise QueueClientError(
+                "Reextract queue name is not configured.",
+                reason="ReextractQueueNameMissing",
+            )
+        return self.reextract_queue_name
 
     async def dispose(self) -> None:
         await self._redis.aclose()
