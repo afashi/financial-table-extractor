@@ -4,6 +4,7 @@ from typing import Annotated
 from fastapi import Depends, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from apps.core_service.app.services.review_service import ReviewService
 from apps.core_service.app.services.task_service import TaskService
 
 
@@ -30,4 +31,15 @@ async def get_task_service(
         queue_client=request.app.state.queue_client,
         trace_id=request.state.trace_id,
         repository=repository,
+    )
+
+
+async def get_review_service(
+    request: Request,
+    session: SessionDependency,
+) -> ReviewService:
+    return ReviewService(
+        session=session,
+        task_repository=getattr(request.app.state, "task_repository", None),
+        result_repository=getattr(request.app.state, "result_repository", None),
     )
